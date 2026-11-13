@@ -10,5 +10,11 @@ size_t p25_lab_command(const uint8_t *req, uint16_t len, uint8_t *out, size_t ca
 int p25_lab_live_begin(uint32_t session);
 int p25_lab_channel_rx(uint32_t frequency_hz);
 void p25_lab_live_up(void);
+#if CONFIG_P25_CHANNELS
+/* Worker input snapshot; changed only after the previous worker has stopped. */
+int p25_lab_set_channel(uint16_t nac, uint16_t talkgroup, uint32_t radio_id);
+void p25_lab_channel_stop(void);
+int p25_lab_channel_receiving(void);
+#endif
 #endif
 #endif

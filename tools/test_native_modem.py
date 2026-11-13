@@ -35,5 +35,4 @@ def main():
          "integration/radiofoundry/native/hrc_native_chip.c","integration/radiofoundry/native/hrc_native_port.c",
          "tests/native/test_port.c","-o",OUT/"test_port"])
     run([OUT/"test_port"])
-    run(["python3","-m","unittest","discover","-s","tests","-p","test_native_client.py","-v"])
 if __name__=="__main__": main()

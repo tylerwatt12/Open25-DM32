@@ -19,7 +19,10 @@ static int native_prepare(void *ctx, const nt_config *c)
     (void)ctx;
     if (mode!=RADIO_MODE_FM || transmitting || (TMR_CTRL(6)&1u) || (TMR_CTRL(TIMER_PA)&1u)) return 0;
 #if CONFIG_DEV_TX
-    if(c->mode==NT_TRANSMIT && (!bf_cal_valid() || !firstboot_native_tx_open(native_chip.test)))return 0;
+    if(c->mode==NT_TRANSMIT && (!bf_cal_valid() || !board_in_band(c->frequency_hz,true) || c->power>=board.power_count))return 0;
+#if CONFIG_FIRSTBOOT
+    if(c->mode==NT_TRANSMIT && !firstboot_native_tx_open(native_chip.test))return 0;
+#endif
 #endif
     hrc_audio_pcm_hold(true);
     audio(false);
@@ -28,7 +31,7 @@ static int native_prepare(void *ctx, const nt_config *c)
     if (!rx(c->frequency_hz,RADIO_BW_12K5,NULL)) return 0;
     /* Audio sessions may feed the speaker FIFO; raw PHY bench sessions hold it. */
     if (c->mode==NT_RECEIVE && c->audio) hrc_audio_pcm_hold(false);
-    return c->mode!=NT_TRANSMIT || tx(c->frequency_hz,RADIO_BW_12K5,0,NULL);
+    return c->mode!=NT_TRANSMIT || tx(c->frequency_hz,RADIO_BW_12K5,c->power,NULL);
 }
 static void native_off(void *ctx) {
     (void)ctx;

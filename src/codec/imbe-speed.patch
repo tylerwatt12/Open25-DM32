@@ -1,0 +1,1402 @@
+Fixed-point arithmetic, pitch and transform fast paths.
+Adapted from imostlylurk/imbe_embedded b49c753b9d6a8b1221138fc29ac3e10fd49f7e8a.
+Modified for Open25-DM32, 2026-11-09.
+SPDX-License-Identifier: GPL-3.0-or-later
+
+--- a/basicop2.cc
++++ b/basicop2.cc
+@@ -392,23 +392,8 @@
+     }
+     else
+     {
+-        if (var2 >= 15)
+-        {
+-            var_out = (var1 < 0) ? -1 : 0;
+-        }
+-        else
+-        {
+-            if (var1 < 0)
+-            {
+-                var_out = ~((~var1) >> var2);
+-            }
+-            else
+-            {
+-                var_out = var1 >> var2;
+-            }
+-        }
+-    }
+-
++        var_out = var1 >> (var2 >= 15 ? 15 : var2);
++    }
+ #if (WMOPS)
+     multiCounter[currCounter].shr++;
+ #endif
+@@ -952,22 +937,16 @@
+ 
+ Word32 L_add (Word32 L_var1, Word32 L_var2)
+ {
+-    Word32 L_var_out;
+-
+-    L_var_out = (Word32)((UWord32)L_var1 + (UWord32)L_var2);
+-
+-    if (((L_var1 ^ L_var2) & MIN_32) == 0)
+-    {
+-        if ((L_var_out ^ L_var1) & MIN_32)
+-        {
+-            L_var_out = (L_var1 < 0) ? MIN_32 : MAX_32;
+-            Overflow = 1;
+-        }
++    Word32 result;
++    if (__builtin_add_overflow(L_var1, L_var2, &result))
++    {
++        Overflow = 1;
++        result = L_var1 < 0 ? MIN_32 : MAX_32;
+     }
+ #if (WMOPS)
+     multiCounter[currCounter].L_add++;
+ #endif
+-    return (L_var_out);
++    return result;
+ }
+ 
+ /*___________________________________________________________________________
+@@ -1004,22 +983,16 @@
+ 
+ Word32 L_sub (Word32 L_var1, Word32 L_var2)
+ {
+-    Word32 L_var_out;
+-
+-    L_var_out = (Word32)((UWord32)L_var1 - (UWord32)L_var2);
+-
+-    if (((L_var1 ^ L_var2) & MIN_32) != 0)
+-    {
+-        if ((L_var_out ^ L_var1) & MIN_32)
+-        {
+-            L_var_out = (L_var1 < 0L) ? MIN_32 : MAX_32;
+-            Overflow = 1;
+-        }
++    Word32 result;
++    if (__builtin_sub_overflow(L_var1, L_var2, &result))
++    {
++        Overflow = 1;
++        result = L_var1 < 0 ? MIN_32 : MAX_32;
+     }
+ #if (WMOPS)
+     multiCounter[currCounter].L_sub++;
+ #endif
+-    return (L_var_out);
++    return result;
+ }
+ 
+ /*___________________________________________________________________________
+@@ -1365,44 +1338,29 @@
+ 
+ Word32 L_shl (Word32 L_var1, Word16 var2)
+ {
+-    Word32 L_var_out=0;
+-
++    Word32 result = 0;
+     if (var2 <= 0)
+     {
+-        if (var2 < -32)
+-            var2 = -32;
+-        L_var_out = L_shr (L_var1, -var2);
++        result = L_shr(L_var1, var2 < -31 ? 31 : -var2);
+ #if (WMOPS)
+         multiCounter[currCounter].L_shr--;
+ #endif
+     }
+-    else
+-    {
+-        for (; var2 > 0; var2--)
+-        {
+-            if (L_var1 > (Word32) 0X3fffffffL)
+-            {
+-                Overflow = 1;
+-                L_var_out = MAX_32;
+-                break;
+-            }
+-            else
+-            {
+-                if (L_var1 < (Word32) 0xc0000000L)
+-                {
+-                    Overflow = 1;
+-                    L_var_out = MIN_32;
+-                    break;
+-                }
+-            }
+-            L_var1 *= 2;
+-            L_var_out = L_var1;
++    else if (L_var1 != 0)
++    {
++        // Shift unsigned, then check that the signed result can recover
++        // every bit of the input. This also admits -1 shifted left by 31.
++        result = var2 < 32 ? (Word32)((UWord32)L_var1 << var2) : 0;
++        if (var2 >= 32 || (result >> var2) != L_var1)
++        {
++            Overflow = 1;
++            result = L_var1 < 0 ? MIN_32 : MAX_32;
+         }
+     }
+ #if (WMOPS)
+     multiCounter[currCounter].L_shl++;
+ #endif
+-    return (L_var_out);
++    return result;
+ }
+ 
+ /*___________________________________________________________________________
+@@ -1441,39 +1399,25 @@
+ 
+ Word32 L_shr (Word32 L_var1, Word16 var2)
+ {
+-    Word32 L_var_out;
++    Word32 var_out;
+ 
+     if (var2 < 0)
+     {
+         if (var2 < -32)
+             var2 = -32;
+-        L_var_out = L_shl (L_var1, -var2);
++        var_out = L_shl (L_var1, -var2);
+ #if (WMOPS)
+         multiCounter[currCounter].L_shl--;
+ #endif
+     }
+     else
+     {
+-        if (var2 >= 31)
+-        {
+-            L_var_out = (L_var1 < 0L) ? -1 : 0;
+-        }
+-        else
+-        {
+-            if (L_var1 < 0)
+-            {
+-                L_var_out = ~((~L_var1) >> var2);
+-            }
+-            else
+-            {
+-                L_var_out = L_var1 >> var2;
+-            }
+-        }
++        var_out = L_var1 >> (var2 >= 31 ? 31 : var2);
+     }
+ #if (WMOPS)
+     multiCounter[currCounter].L_shr++;
+ #endif
+-    return (L_var_out);
++    return (var_out);
+ }
+ 
+ /*___________________________________________________________________________
+@@ -1963,35 +1907,16 @@
+ 
+ Word16 norm_s (Word16 var1)
+ {
+-    Word16 var_out;
+-
++#if (WMOPS)
++    multiCounter[currCounter].norm_s++;
++#endif
+     if (var1 == 0)
+-    {
+-        var_out = 0;
+-    }
+-    else
+-    {
+-        if (var1 == (Word16) 0xffff)
+-        {
+-            var_out = 15;
+-        }
+-        else
+-        {
+-            if (var1 < 0)
+-            {
+-                var1 = ~var1;
+-            }
+-            for (var_out = 0; var1 < 0x4000; var_out++)
+-            {
+-                var1 <<= 1;
+-            }
+-        }
+-    }
+-
+-#if (WMOPS)
+-    multiCounter[currCounter].norm_s++;
+-#endif
+-    return (var_out);
++        return 0;
++    if (var1 == -1)
++        return 15;
++
++    const unsigned normalized = (unsigned)(var1 < 0 ? ~var1 : var1);
++    return (Word16)(__builtin_clz(normalized) - 17);
+ }
+ 
+ /*___________________________________________________________________________
+@@ -2033,66 +1958,19 @@
+ 
+ Word16 div_s (Word16 var1, Word16 var2)
+ {
+-    Word16 var_out = 0;
+-    Word16 iteration;
+-    Word32 L_num;
+-    Word32 L_denom;
+-
+-    if ((var1 > var2) || (var1 < 0) || (var2 < 0))
++    if (var1 < 0 || var2 <= 0 || var1 > var2)
+     {
+         dm32_imbe_note_fault();
+         return 0;
+     }
+-    if (var2 == 0)
+-    {
+-        dm32_imbe_note_fault();
+-        return 0;
+-    }
+-    if (var1 == 0)
+-    {
+-        var_out = 0;
+-    }
+-    else
+-    {
+-        if (var1 == var2)
+-        {
+-            var_out = MAX_16;
+-        }
+-        else
+-        {
+-            L_num = L_deposit_l (var1);
+-#if (WMOPS)
+-            multiCounter[currCounter].L_deposit_l--;
+-#endif
+-            L_denom = L_deposit_l (var2);
+-#if (WMOPS)
+-            multiCounter[currCounter].L_deposit_l--;
+-#endif
+-
+-            for (iteration = 0; iteration < 15; iteration++)
+-            {
+-                var_out <<= 1;
+-                L_num <<= 1;
+-
+-                if (L_num >= L_denom)
+-                {
+-                    L_num = L_sub (L_num, L_denom);
+-#if (WMOPS)
+-                    multiCounter[currCounter].L_sub--;
+-#endif
+-                    var_out = add (var_out, 1);
+-#if (WMOPS)
+-                    multiCounter[currCounter].add--;
+-#endif
+-                }
+-            }
+-        }
+-    }
+-
+ #if (WMOPS)
+     multiCounter[currCounter].div_s++;
+ #endif
+-    return (var_out);
++    if (var1 == var2)
++        return MAX_16;
++
++    // The 15 restoring steps compute the truncated Q15 quotient.
++    return (Word16)(((UWord32)var1 << 15) / (UWord32)var2);
+ }
+ 
+ /*___________________________________________________________________________
+@@ -2130,34 +2008,14 @@
+ 
+ Word16 norm_l (Word32 L_var1)
+ {
+-    Word16 var_out;
+-
++#if (WMOPS)
++    multiCounter[currCounter].norm_l++;
++#endif
+     if (L_var1 == 0)
+-    {
+-        var_out = 0;
+-    }
+-    else
+-    {
+-        if (L_var1 == (Word32) 0xffffffffL)
+-        {
+-            var_out = 31;
+-        }
+-        else
+-        {
+-            if (L_var1 < 0)
+-            {
+-                L_var1 = ~L_var1;
+-            }
+-            for (var_out = 0; L_var1 < (Word32) 0x40000000L; var_out++)
+-            {
+-                L_var1 <<= 1;
+-            }
+-        }
+-    }
+-
+-#if (WMOPS)
+-    multiCounter[currCounter].norm_l++;
+-#endif
+-    return (var_out);
+-}
+-
++        return 0;
++    if (L_var1 == -1)
++        return 31;
++
++    const unsigned normalized = (unsigned)(L_var1 < 0 ? ~L_var1 : L_var1);
++    return (Word16)(__builtin_clz(normalized) - 1);
++}
+--- a/dsp_sub.cc
++++ b/dsp_sub.cc
+@@ -144,42 +144,17 @@
+ 
+ 
+ 
+-void imbe_vocoder_impl::fft_init(void)
+-{
+-	Word16 i, fft_len2, shift, step, theta;
+-
+-	fft_len2 = shr(FFTLENGTH, 1);
+-	shift    = norm_s(fft_len2);
+-	step     = shl(2, shift);
+-	theta    = 0;
+-
+-	for(i = 0; i <= fft_len2; i++) 
+-	{
+-		wr_array[i] = cos_fxp(theta);    
+-		wi_array[i] = sin_fxp(theta);    
+-		if(i >= (fft_len2 - 1))
+-			theta = ONE_Q15;
+-		else
+-			theta = add(theta, step);
+-	}
+-}
+-
+-
+ //  	Subroutine FFT: Fast Fourier Transform 		
+ // ***************************************************************
+ // * Replaces data by its DFT, if isign is 1, or replaces data   *
+-// * by inverse DFT times nn if isign is -1.  data is a complex  *
+-// * array of length nn, input as a real array of length 2*nn.   *
+-// * nn MUST be an integer power of two.  This is not checked    *
++// * by inverse DFT times FFTLENGTH if isign is -1.              *
++// * The FFTLENGTH complex samples are stored as interleaved     *
++// * real and imaginary elements.                               *
+ // * The real part of the number should be in the zeroeth        *
+ // * of data , and the imaginary part should be in the next      *
+ // * element.  Hence all the real parts should have even indeces *
+ // * and the imaginary parts, odd indeces.			             *
+ // *                                                             * 
+-// * Data is passed in an array starting in position 0, but the  *
+-// * code is copied from Fortran so uses an internal pointer     *
+-// * which accesses position 0 as position 1, etc.		         *
+-// *                                                             *
+ // * This code uses e+jwt sign convention, so isign should be    *
+ // * reversed for e-jwt.                                         *
+ // ***************************************************************
+@@ -188,91 +163,77 @@
+ // datam1 - Q14
+ // isign  - Q15 
+ 
+-#define	SWAP(a,b) temp1 = (a);(a) = (b); (b) = temp1
+-
+-void imbe_vocoder_impl::fft(Word16 *datam1, Word16 nn, Word16 isign)
+-{
+-	Word16 n, mmax, m, j, istep, i;
+-	Word16 wr, wi, temp1;
+-	Word32 L_tempr, L_tempi;
+-	Word16 *data;
+-	Word32 L_temp1, L_temp2;
+-	Word16 index, index_step;
+-
+-	//  One-based FFT loop indices translated at each array access	
+-	data = datam1;
+-
+-	n = shl(nn,1);
+-	j = 1;
+-	for( i = 1; i < n; i+=2 ) 
+-	{
+-		if ( j > i) 
+-		{
+-			SWAP(data[j-1],data[i-1]);    
+-			SWAP(data[j],data[i]);   
+-		}
+-		m = nn;
+-		while ( m >= 2 && j > m ) 
+-		{
+-			j = sub(j,m);
+-			m = shr(m,1);
+-		}
+-		j = add(j,m);
+-	}
+-	mmax = 2;
+-
+-	// initialize index step 
+-	index_step = nn;
+-
+-	while ( n > mmax) 
+-	{
+-		istep = shl(mmax,1);  // istep = 2 * mmax 
+-
+-		index = 0;
+-		index_step = shr(index_step,1);
+-
+-		wr = ONE_Q15;
+-		wi = 0;
+-		for ( m = 1; m < mmax; m+=2) 
+-		{
+-			for ( i = m; i <= n; i += istep) 
+-			{
+-				j = i + mmax;
+-
+-				// tempr = wr * data[j-1] - wi * data[j] 
+-				L_temp1 = L_shr(L_mult(wr,data[j-1]),1);
+-				L_temp2 = L_shr(L_mult(wi,data[j]),1);
+-				L_tempr = L_sub(L_temp1,L_temp2);
+-
+-				// tempi = wr * data[j] + wi * data[j-1] 
+-				L_temp1 = L_shr(L_mult(wr,data[j]),1);
+-				L_temp2 = L_shr(L_mult(wi,data[j-1]),1);
+-				L_tempi = L_add(L_temp1,L_temp2);
+-
+-
+-				// data[j-1] = data[i-1] - tempr 
+-				L_temp1 = L_shr(L_deposit_h(data[i-1]),1);
+-				data[j-1] = round(L_sub(L_temp1,L_tempr));
+-
+-				// data[i-1] += tempr 
+-				data[i-1] = round(L_add(L_temp1,L_tempr));
+-
+-				// data[j] = data[i] - tempi 
+-				L_temp1 = L_shr(L_deposit_h(data[i]),1);
+-				data[j] = round(L_sub(L_temp1,L_tempi));
+-
+-				// data[i] += tempi 
+-				data[i] = round(L_add(L_temp1,L_tempi));
+-			}
+-			index = add(index,index_step);
+-			wr = wr_array[index];
+-			if (isign < 0)
+-				wi = negate(wi_array[index]);
+-			else
+-				wi = wi_array[index];
+-		}
+-		mmax = istep;
+-	}
+-} 
+-
+-
++// Convert a Q31 butterfly result to Q15 with the original saturated rounding.
++static inline Word16 fft_round(Word32 value)
++{
++    if (value > MAX_32 - 0x8000)
++        return MAX_16;
++    return (Word16)((value + 0x8000) >> 16);
++}
++
++static inline void fft_butterfly(Word16 &top, Word16 &bottom, Word32 product)
++{
++    const Word32 value = (Word32)top * 32768;
++    Word32 sum, difference;
++    const Word16 limit = value < 0 ? MIN_16 : MAX_16;
++    top = __builtin_add_overflow(value, product, &sum) ? limit : fft_round(sum);
++    bottom = __builtin_sub_overflow(value, product, &difference) ? limit : fft_round(difference);
++}
++
++void imbe_vocoder_impl::fft(Word16 *data, Word16 isign)
++{
++    const int length = 2 * FFTLENGTH;
++    int reversed = 0;
++    for (int i = 0; i < length; i += 2)
++    {
++        if (reversed > i)
++        {
++            const Word16 real = data[i];
++            const Word16 imag = data[i + 1];
++            data[i] = data[reversed];
++            data[i + 1] = data[reversed + 1];
++            data[reversed] = real;
++            data[reversed + 1] = imag;
++        }
++        int bit = FFTLENGTH;
++        while (bit >= 2 && reversed >= bit)
++        {
++            reversed -= bit;
++            bit >>= 1;
++        }
++        reversed += bit;
++    }
++
++    int twiddle_step = FFTLENGTH;
++    for (int half = 2; half < length; half *= 2)
++    {
++        const int stride = 2 * half;
++        twiddle_step >>= 1;
++
++        // The first twiddle is (32767, 0) in Q15. Its cross terms vanish.
++        for (int i = 0; i < length; i += stride)
++        {
++            const int j = i + half;
++            fft_butterfly(data[i], data[j], (Word32)data[j] * ONE_Q15);
++            fft_butterfly(data[i + 1], data[j + 1], (Word32)data[j + 1] * ONE_Q15);
++        }
++
++        int index = twiddle_step;
++        for (int offset = 2; offset < half; offset += 2, index += twiddle_step)
++        {
++            const Cmplx16 coefficient = fft_twiddle(index);
++            const Word32 wr = coefficient.re;
++            const Word32 wi = isign < 0 ? -(Word32)coefficient.im : coefficient.im;
++            for (int i = offset; i < length; i += stride)
++            {
++                const int j = i + half;
++                // Twiddles have magnitude at most 32767. L_mult(a,b)>>1
++                // equals a*b here, and 2*32767*32768 fits in Word32.
++                const Word32 real = wr * data[j] - wi * data[j + 1];
++                const Word32 imag = wr * data[j + 1] + wi * data[j];
++                fft_butterfly(data[i], data[j], real);
++                fft_butterfly(data[i + 1], data[j + 1], imag);
++            }
++        }
++    }
++}
+--- a/dsp_sub.h
++++ b/dsp_sub.h
+@@ -73,8 +73,7 @@
+ #define FFTLENGTH 256
+ 
+ 
+-void fft_init(void);
+-void fft(Word16 *datam1, Word16 nn, Word16 isign);
++Cmplx16 fft_twiddle(int index);
+ 
+ void c_fft(Word16 * farray_ptr);
+ 
+--- a/encode.cc
++++ b/encode.cc
+@@ -43,11 +43,9 @@
+ 
+ void imbe_vocoder_impl::encode_init(void)
+ {
+-	v_zap(pitch_est_buf, PITCH_EST_BUF_SIZE);
++	v_zap(pitch_est_buf, PITCH_EST_FRAME);
+ 	v_zap(pitch_ref_buf, PITCH_EST_BUF_SIZE);
+-	v_zap(pe_lpf_mem, PE_LPF_ORD);
+ 	pitch_est_init();
+-	fft_init();
+ 	dc_rmv_mem = 0;
+ 	sa_encode_init();
+ 	pitch_ref_init();
+@@ -61,12 +59,15 @@
+ 	
+ 	for(i = 0; i < PITCH_EST_BUF_SIZE - FRAME; i++)
+ 	{
+-		pitch_est_buf[i] = pitch_est_buf[i + FRAME];
+ 		pitch_ref_buf[i] = pitch_ref_buf[i + FRAME];
+ 	}
+ 		
+ 	dc_rmv(snd, &pitch_ref_buf[PITCH_EST_BUF_SIZE - FRAME], &dc_rmv_mem, FRAME);
+-	pe_lpf(&pitch_ref_buf[PITCH_EST_BUF_SIZE - FRAME], &pitch_est_buf[PITCH_EST_BUF_SIZE - FRAME], pe_lpf_mem, FRAME);
++	static_assert(PITCH_EST_BUF_SIZE >= FRAME + PE_LPF_ORD - 1, "pitch filter requires buffered history");
++	for(i = 0; i < PITCH_EST_FRAME - FRAME; i++)
++		pitch_est_buf[i] = pitch_est_buf[i + FRAME];
++	pe_lpf(&pitch_ref_buf[PITCH_EST_BUF_SIZE - FRAME - (PE_LPF_ORD - 1)],
++	       &pitch_est_buf[PITCH_EST_FRAME - FRAME], FRAME);
+ 
+ 	pitch_est(imbe_param, pitch_est_buf);
+ 
+@@ -91,7 +92,7 @@
+ 	for(i = 111; i < 146; i++) 
+ 		fft_buf[i].re = fft_buf[i].im = 0;
+ 
+-	fft((Word16 *)&fft_buf, FFTLENGTH, 1);
++	fft((Word16 *)&fft_buf, 1);
+ 
+ 	pitch_ref(imbe_param, fft_buf);
+ 	v_uv_det(imbe_param, fft_buf);
+--- a/imbe_vocoder_impl.cc
++++ b/imbe_vocoder_impl.cc
+@@ -21,12 +21,8 @@
+ 	th_max(0),
+ 	dc_rmv_mem(0)
+ {
+-	memset(wr_array, 0, sizeof(wr_array));
+-	memset(wi_array, 0, sizeof(wi_array));
+ 	memset(pitch_est_buf, 0, sizeof(pitch_est_buf));
+ 	memset(pitch_ref_buf, 0, sizeof(pitch_ref_buf));
+-	memset(pe_lpf_mem, 0, sizeof(pe_lpf_mem));
+-	memset(fft_buf, 0, sizeof(fft_buf));
+ 	memset(sa_prev1, 0, sizeof(sa_prev1));
+ 	memset(sa_prev2, 0, sizeof(sa_prev2));
+ 	memset(uv_mem, 0, sizeof(uv_mem));
+--- a/imbe_vocoder_impl.h
++++ b/imbe_vocoder_impl.h
+@@ -53,20 +53,18 @@
+ 	Word16 sa_prev3[NUM_HARMS_MAX];
+ 	Word32 th_max;
+ 	Word16 v_uv_dsn[NUM_BANDS_MAX];
+-	Word16 wr_array[FFTLENGTH / 2 + 1];
+-	Word16 wi_array[FFTLENGTH / 2 + 1];
+-	Word16 pitch_est_buf[PITCH_EST_BUF_SIZE];
++	Word16 pitch_est_buf[PITCH_EST_FRAME];
++	Word16 pitch_scores[3][203];
++	uint8_t pitch_score_index;
+ 	Word16 pitch_ref_buf[PITCH_EST_BUF_SIZE];
+ 	Word32 dc_rmv_mem;
+ 	Cmplx16 fft_buf[FFTLENGTH];
+-	Word16 pe_lpf_mem[PE_LPF_ORD];
+ 
+ 	/* member functions */
+ 	Word16 rand_gen(void);
+ 	void idct(Word16 *in, Word16 m_lim, Word16 i_lim, Word16 *out);
+ 	void dct(Word16 *in, Word16 m_lim, Word16 i_lim, Word16 *out);
+-	void fft_init(void);
+-	void fft(Word16 *datam1, Word16 nn, Word16 isign);
++	void fft(Word16 *data, Word16 isign);
+ 	void encode(IMBE_PARAM *imbe_param, Word16 *frame_vector, Word16 *snd);
+ 	void parse(int argc, char **argv);
+ 	void pitch_est_init(void);
+--- a/math_sub.cc
++++ b/math_sub.cc
+@@ -22,6 +22,8 @@
+ #include "typedef.h"
+ #include "basic_op.h"
+ #include "math_sub.h"
++#include "imbe.h"
++#include "dsp_sub.h"
+ 
+ //-----------------------------------------------------------------------------
+ // Table for routine Pow2()     table[] = 2^(-1...0)
+@@ -154,43 +156,38 @@
+ //-----------------------------------------------------------------------------
+ Word16 cos_fxp(Word16 x)
+ {
+-	Word16 tx, ty;
+-	Word16 sign;
+-	Word16 index1,index2;
+-	Word16 m;
+-	Word16 temp;
+-
+-	sign = 0;
+-	if(x < 0) 
+-		tx = negate(x);     
+-	else
+-		tx = x;     
+-
+-	// if angle > pi/2, cos(angle) = -cos(pi-angle) 
+-	if(tx > X05_Q15)
+-	{
+-		tx = sub(ONE_Q15,tx);     
+-		sign = -1;     
+-	}
+-	// convert input to be within range 0-128 
+-	index1 = shr(tx,7);     
+-	index2 = add(index1,1);    
+-
+-	if (index1 == 128)
+-		return (Word16)0;
+-
+-	m = sub(tx,shl(index1,7));
+-	// convert decimal part to Q15 
+-	m = shl(m,8);    
+-
+-	temp = sub(cos_table[index2],cos_table[index1]);
+-	temp = mult(m,temp);
+-	ty   = add(cos_table[index1],temp);    
+-
+-	if(sign)
+-		return negate(ty);
+-	else
+-		return ty;
++    Word32 angle = (x == MIN_16) ? MAX_16 : (x < 0 ? -(Word32)x : x);
++    const bool negative = angle > X05_Q15;
++    if (negative)
++        angle = ONE_Q15 - angle;
++
++    const int index = angle >> 7;
++    if (index == 128)
++        return 0;
++
++    // The interpolated value lies between adjacent table entries.
++    const Word32 fraction = (angle & 127) * 256;
++    const Word32 low = cos_table[index];
++    const Word32 value = low + ((fraction * (cos_table[index + 1] - low)) >> 15);
++    return (Word16)(negative ? -value : value);
++}
++
++// FFT angles are multiples of 256 in Q15. Sine lands on the
++// cosine table. For the second cosine quadrant the original
++// reflection about 32767 leaves a fraction of 127/128.
++Cmplx16 fft_twiddle(int index)
++{
++    constexpr int quadrant = FFTLENGTH / 4;
++    static_assert(FFTLENGTH == 256, "FFT coefficient spacing");
++    const int distance = index > quadrant ? index - quadrant : quadrant - index;
++    const Word16 sine = cos_table[2 * distance];
++    if (index <= quadrant)
++        return {cos_table[2 * index], sine};
++
++    const int folded = FFTLENGTH - 2 * index;
++    const Word16 cosine = (Word16)-(cos_table[folded] +
++                                  ((cos_table[folded - 1] - cos_table[folded]) >> 7));
++    return {cosine, sine};
+ }
+ 
+ //-----------------------------------------------------------------------------
+--- a/pe_lpf.cc
++++ b/pe_lpf.cc
+@@ -36,39 +36,15 @@
+ };
+ 
+ 
+-//-----------------------------------------------------------------------------
+-//	PURPOSE:
+-//		Low-pass filter for pitch estimator
+-//     
+-//
+-//  INPUT:
+-//		*sigin  - pointer to input signal buffer
+-//      *sigout - pointer to output signal buffer
+-//      *mem    - pointer to filter's memory element
+-//       len    - number of input signal samples
+-//
+-//	OUTPUT:
+-//		None
+-//
+-//	RETURN:
+-//       Saved filter state in mem
+-//
+-//-----------------------------------------------------------------------------
+-void pe_lpf(Word16 *sigin, Word16 *sigout, Word16 *mem, Word16 len)
++void pe_lpf(const Word16 *window, Word16 *sigout, Word16 len)
+ {
+-	Word16 i;
+-	Word32 L_sum;
+-
+-	while(len--)
+-	{
+-		for(i = 0; i < PE_LPF_ORD - 1; i++)
+-			mem[i] = mem[i + 1];
+-		mem[PE_LPF_ORD - 1] = *sigin++;
+-
+-		L_sum = 0;
+-		for(i = 0; i < PE_LPF_ORD; i++)
+-			L_sum = L_mac(L_sum, mem[i], lpf_coef[i]);
+-
+-		*sigout++ = round(L_sum);
+-	}
++    for (int i = 0; i < len; ++i)
++    {
++        Word32 sum = 0;
++        // Coefficients fit in [-11512, 11512], so doubling the product
++        // cannot overflow. Preserve saturation after each addition.
++        for (int tap = 0; tap < PE_LPF_ORD; ++tap)
++            sum = L_add(sum, (Word32)window[i + tap] * lpf_coef[tap] * 2);
++        sigout[i] = round(sum);
++    }
+ }
+--- a/pe_lpf.h
++++ b/pe_lpf.h
+@@ -23,25 +23,9 @@
+ #define _PE_LPF
+ 
+ 
+-//-----------------------------------------------------------------------------
+-//	PURPOSE:
+-//		Low-pass filter for pitch estimator
+-//     
+-//
+-//  INPUT:
+-//		*sigin  - pointer to input signal buffer
+-//      *sigout - pointer to output signal buffer
+-//      *mem    - pointer to filter's memory element
+-//       len    - number of input signal samples
+-//
+-//	OUTPUT:
+-//		None
+-//
+-//	RETURN:
+-//       Saved filter state in mem
+-//
+-//-----------------------------------------------------------------------------
+-void pe_lpf(Word16 *sigin, Word16 *sigout, Word16 *mem, Word16 len);
++// window starts with the PE_LPF_ORD - 1 preceding samples, followed by
++// len new samples. The encoder's DC-filtered pitch buffer owns this history.
++void pe_lpf(const Word16 *window, Word16 *sigout, Word16 len);
+ 
+ 
+ #endif
+--- a/pitch_est.cc
++++ b/pitch_est.cc
+@@ -34,7 +34,7 @@
+ 
+ 
+ 
+-static const UWord16 min_max_tbl[203] = 
++static constexpr UWord16 min_max_tbl[203] =
+ {
+ 	0x0008, 0x0009, 0x000a, 0x000c, 0x000d, 0x000e, 0x000f, 0x0010, 0x0012, 0x0013, 
+ 	0x0014, 0x0115, 0x0216, 0x0218, 0x0319, 0x041a, 0x051b, 0x061c, 0x061e, 0x071f, 
+@@ -63,24 +63,62 @@
+ 
+ 
+ 
++// Every range includes its own index and both endpoints move forward.
++static constexpr int pitch_first(unsigned i) { return min_max_tbl[i] >> 8; }
++static constexpr int pitch_last(unsigned i) { return min_max_tbl[i] & 0xff; }
++static constexpr bool pitch_ranges_valid(int i)
++{
++    return i == 203 ||
++           (pitch_first(i) <= i && pitch_last(i) >= i &&
++            pitch_last(i) < 203 &&
++            (i == 0 || (pitch_first(i - 1) <= pitch_first(i) &&
++                        pitch_last(i - 1) <= pitch_last(i))) &&
++            pitch_ranges_valid(i + 1));
++}
++static_assert(pitch_ranges_valid(0), "pitch ranges must move forward");
++
++// Keep the active candidates in increasing score order. Each index
++// enters the queue once, and an equal or better later score replaces it.
++static void pitch_range_min(const Word16 *scores, Word16 *minimum)
++{
++    uint8_t candidates[203];
++    int head = 0, tail = 0, next = 0;
++    for (int i = 0; i < 203; ++i)
++    {
++        const int first = pitch_first(i);
++        const int last = pitch_last(i);
++        while (head < tail && candidates[head] < first)
++            ++head;
++        for (; next <= last; ++next)
++        {
++            while (head < tail && scores[candidates[tail - 1]] >= scores[next])
++                --tail;
++            candidates[tail++] = (uint8_t)next;
++        }
++        minimum[i] = scores[candidates[head]];
++    }
++}
++
+ void imbe_vocoder_impl::pitch_est_init(void)
+ {
+ 	prev_pitch = prev_prev_pitch = 158; // 100
+ 	prev_e_p = prev_prev_e_p = 0;
++	pitch_score_index = 0;
++	// The two leading windows contain only zero samples.
++	for(int i = 0; i < 203; i++)
++		pitch_scores[0][i] = pitch_scores[1][i] = CNST_1_00_Q4_12;
+ }
+ 
+ 
+ 
+ Word32 imbe_vocoder_impl::autocorr(Word16 *sigin, Word16 shift, Word16 scale_shift)
+ {
+-	Word32 L_sum;
+-	Word16 i;
+-
+-	L_sum = 0;
+-	for(i = 0; i < PITCH_EST_FRAME - shift; i++)
+-		L_sum = L_add(L_sum, L_shr(L_mult(sigin[i], sigin[i + shift]), scale_shift) );
+-
+-	return L_sum;
++    // The window limits samples to [-17779, 17779]. The doubled
++    // product fits in Word32, including when the sum has to saturate.
++    Word32 sum = 0;
++    for (int i = 0; i < PITCH_EST_FRAME - shift; ++i)
++        sum = L_add(sum, ((Word32)sigin[i] * sigin[i + shift] * 2) >> scale_shift);
++    return sum;
+ }
+ 
+ 
+@@ -95,13 +133,17 @@
+ 	Word16 scale_shift;
+ 
+ 
+-	// Windowing input signal s * wi^2
+-	for(i = 0 ; i < PITCH_EST_FRAME; i++)
+-		sig_wndwed[i] = mult_r(sigin[i], wi[i]);                                
+-
+ 	L_sum = 0;
+ 	for(i = 0 ; i < PITCH_EST_FRAME; i++)
+ 		L_sum = L_add(L_sum, L_mpy_ls( L_mult(sigin[i], sigin[i]), wi[i]) );     // sum(s^2 * wi^2)
++
++    // Zero energy gives a zero denominator for every pitch.
++    if (L_sum == 0)
++    {
++        for (int pitch = 0; pitch < 203; ++pitch)
++            res_buf[pitch] = CNST_1_00_Q4_12;
++        return;
++    }
+ 
+ 	// Check for the overflow
+ 	if(L_sum == MAX_32)
+@@ -116,13 +158,33 @@
+ 		scale_shift = 0;
+ 	
+ 	L_e0 = 0;
+-	for(i = 0 ; i < PITCH_EST_FRAME; i++)
+-		L_e0 = L_add(L_e0, L_shr( L_mult(sig_wndwed[i], sig_wndwed[i]), scale_shift));              // sum(s^2 * wi^4) 
++	for (i = 0; i < PITCH_EST_FRAME; ++i)
++	{
++		// wi[] bounds the windowed sample to +/-17779.
++		const Word32 sample = mult_r(sigin[i], wi[i]);
++		sig_wndwed[i] = (Word16)sample;
++		L_e0 = L_add(L_e0, (sample * sample * 2) >> scale_shift);
++	}
+ 
+     // Calculate correlation for time shift in range 21...150 with step 0.5
+ 	// For integer shifts
+ 	for(tmp = 21, i = 0; tmp <= 150; tmp++, i += 2)
+-		corr[i] = autocorr(sig_wndwed, tmp, scale_shift);
++	{
++		if(L_e0 > MAX_32 - PITCH_EST_FRAME) {
++			corr[i] = autocorr(sig_wndwed, tmp, scale_shift);
++			continue;
++		}
++		Word32 sum = 0;
++		const int count = PITCH_EST_FRAME - tmp;
++		if(scale_shift == 0) {
++			for(int k = 0; k < count; k++)
++				sum += (Word32)sig_wndwed[k] * sig_wndwed[k + tmp] * 2;
++		} else {
++			for(int k = 0; k < count; k++)
++				sum += ((Word32)sig_wndwed[k] * sig_wndwed[k + tmp]) >> 4;
++		}
++		corr[i] = sum;
++	}
+ 	// For intermediate shifts
+ 	for(i = 1; i < 258; i += 2)
+ 		corr[i] = L_shr( L_add(corr[i - 1], corr[i + 1]), 1);
+@@ -187,16 +249,23 @@
+ 
+ void imbe_vocoder_impl::pitch_est(IMBE_PARAM *imbe_param, Word16 *frames_buf)
+ {
+-	Word16 e_p_arr0[203], e_p_arr1[203], e_p_arr2[203], e1p1_e2p2_est_save[203];
++	Word16 e1p1_e2p2_est_save[203];
++	const unsigned current = pitch_score_index;
++	const unsigned next = current == 2 ? 0 : current + 1;
++	Word16 *e_p_arr0 = pitch_scores[current];
++	Word16 *e_p_arr1 = pitch_scores[next];
++	Word16 *e_p_arr2 = pitch_scores[current == 0 ? 2 : current - 1];
+ 	Word16 min_index, max_index, p, i, p_index;
+ 	UWord16 tmp=0, p_fp;
+ 	UWord32 UL_tmp;
+-	Word16 e_p_cur, pb, pf, ceb, s_tmp;
+-	Word16 cef_est, cef, p0_est, p0, p1, p2, p1_max_index, p2_max_index, e1p1_e2p2_est; 
+-        Word16 e_p_arr2_min[203];
+-
+-	// Calculate E(p) function for current and two future frames
+-	e_p(&frames_buf[0], e_p_arr0);
++	Word16 e_p_cur, pb, pf, ceb;
++	Word16 cef_est, cef, p0_est, p0;
++	Word16 lookahead[203];
++
++	// The look-ahead windows overlap between frames. Reuse the two
++	// retained scores and recycle the oldest slot for the new window.
++	pitch_score_index = (uint8_t)next;
++	e_p(frames_buf, e_p_arr2);
+ 
+ 	// Look-Back Pitch Tracking
+ 	min_index = HI_BYTE(min_max_tbl[prev_pitch]);
+@@ -227,48 +296,24 @@
+ 
+ 
+ 	// Look-Ahead Pitch Tracking
+-	e_p(&frames_buf[FRAME],     e_p_arr1);
+-	e_p(&frames_buf[2 * FRAME], e_p_arr2);
+-
+-	p0_est = p0 = 0;
+-	cef_est = e_p_arr0[p0] + e_p_arr1[p0] + e_p_arr2[p0];
+-	/* unused upstream constant local removed */
+-
+-            p1 = 0;
+-            while(p1 < 203)
+-            {
+-                        p2 = HI_BYTE(min_max_tbl[p1]);
+-                        p2_max_index = LO_BYTE(min_max_tbl[p1]);
+-                        s_tmp = e_p_arr2[p1];
+-                        while(p2 <= p2_max_index)
+-                        {
+-                                   if(e_p_arr2[p2] < s_tmp)
+-                                               s_tmp = e_p_arr2[p2];                                                          
+-                                   p2++;
+-                        }
+-                        e_p_arr2_min[p1] = s_tmp;
+-                        p1++;
+-            }
+-            while(p0 < 203)
+-            {
+-                        e1p1_e2p2_est = e_p_arr1[p0] + e_p_arr2_min[p0];
+-                        p1 = HI_BYTE(min_max_tbl[p0]);
+-                        p1_max_index = LO_BYTE(min_max_tbl[p0]);
+-                        while(p1 <= p1_max_index)
+-                        {                     
+-                                   if(add(e_p_arr1[p1], e_p_arr2_min[p1]) < e1p1_e2p2_est)                          
+-                                               e1p1_e2p2_est = add(e_p_arr1[p1], e_p_arr2_min[p1]);                                                                 
+-                                   p1++;
+-                        }
+-                        e1p1_e2p2_est_save[p0] = e1p1_e2p2_est;
+-                        cef = add(e_p_arr0[p0], e1p1_e2p2_est);
+-                        if(cef < cef_est)
+-                        {
+-                                   cef_est = cef;
+-                                   p0_est  = p0;
+-                        }    
+-                        p0++;
+-            }
++	p0_est = 0;
++	cef_est = MAX_16;
++
++    // The 203 pitch scores are in [0, 4096], so their sums fit in Word16.
++    pitch_range_min(e_p_arr2, lookahead);
++    for (int pitch = 0; pitch < 203; ++pitch)
++        lookahead[pitch] += e_p_arr1[pitch];
++    pitch_range_min(lookahead, e1p1_e2p2_est_save);
++
++    for (p0 = 0; p0 < 203; ++p0)
++    {
++        cef = e_p_arr0[p0] + e1p1_e2p2_est_save[p0];
++        if (cef < cef_est)
++        {
++            cef_est = cef;
++            p0_est = p0;
++        }
++    }
+ 
+ 	pf = p0_est;
+ 	// Sub-multiples analysis
+--- a/pitch_ref.cc
++++ b/pitch_ref.cc
+@@ -41,11 +41,22 @@
+ 
+ 
+ 
++// wr_sp is positive and bounded by 28165, so the doubled product fits
++// even for a full-scale FFT sample. Saturation still applies to every sum.
++static inline Word32 pitch_mac(Word32 sum, Word16 sample, Word16 window)
++{
++    const Word32 product = (Word32)sample * window * 2;
++    Word32 result;
++    if (__builtin_add_overflow(sum, product, &result))
++        return product < 0 ? MIN_32 : MAX_32;
++    return result;
++}
++
+ void pitch_ref(IMBE_PARAM *imbe_param, Cmplx16 *fft_buf)
+ {
+ 	Word16 i, j, index_a_save, pitch_est, tmp, shift, index_wr, up_lim;
+ 	Cmplx16 sp_rec[FFTLENGTH/2];
+-	Word32 fund_freq, fund_freq_2, fund_freq_acc_a, fund_freq_acc_b, fund_freq_acc, L_tmp, amp_re_acc, amp_im_acc, L_sum, L_diff_min;
++	Word32 fund_freq, fund_freq_2, fund_freq_acc_a, fund_freq_acc_b, fund_freq_acc, L_tmp, amp_re_acc, amp_im_acc, L_diff_min;
+ 	Word16 ha, hb, index_a, index_b, index_tbl[20], it_ind, re_tmp, im_tmp, pitch_cand=0;
+ 	Word32 fund_freq_cand=0;
+ 
+@@ -101,14 +112,16 @@
+ 					index_tbl[it_ind++] = index_wr;				
+ 					if(index_wr >= 0 && index_wr <= 320)
+ 					{
+-						amp_re_acc = L_mac(amp_re_acc, fft_buf[index_a].re, wr_sp[index_wr]);
+-						amp_im_acc = L_mac(amp_im_acc, fft_buf[index_a].im, wr_sp[index_wr]);
++						amp_re_acc = pitch_mac(amp_re_acc, fft_buf[index_a].re, wr_sp[index_wr]);
++						amp_im_acc = pitch_mac(amp_im_acc, fft_buf[index_a].im, wr_sp[index_wr]);
+ 					}
+ 	
+ 					index_a++;
+ 					L_tmp = L_add(L_tmp, 0x400000);
+ 				}
+ 
++				const Word16 amp_re = extract_h(amp_re_acc);
++				const Word16 amp_im = extract_h(amp_im_acc);
+ 				it_ind = 0;
+ 				index_a = index_a_save;			
+ 				while(index_a < index_b)
+@@ -120,8 +133,8 @@
+ 					}
+ 					else
+ 					{	
+-						sp_rec[index_a].im = mult(mult(extract_h(amp_im_acc), wr_sp[index_wr]), 0x6666);
+-						sp_rec[index_a].re = mult(mult(extract_h(amp_re_acc), wr_sp[index_wr]), 0x6666);
++						sp_rec[index_a].im = mult(mult(amp_im, wr_sp[index_wr]), 0x6666);
++						sp_rec[index_a].re = mult(mult(amp_re, wr_sp[index_wr]), 0x6666);
+ 					}
+ 					
+ 					index_a++;
+@@ -133,14 +146,19 @@
+ 			fund_freq_acc   = L_add(fund_freq_acc,   fund_freq);
+ 		}
+ 
+-		L_sum = 0;
+-		for(j = MIN_INDEX; j <= up_lim; j++)
++		// These squares only increase the error. Stop when this candidate
++		// cannot beat the best one, including the initial saturation limit.
++		const UWord32 limit = ((UWord32)L_diff_min + 1u) >> 1;
++		UWord32 error = 0;
++		for(j = MIN_INDEX; j <= up_lim && error < limit; j++)
+ 		{
+ 			re_tmp = sub(fft_buf[j].re, sp_rec[j].re);
+ 			im_tmp = sub(fft_buf[j].im, sp_rec[j].im);
+-			L_sum = L_mac(L_sum, re_tmp, re_tmp);
+-			L_sum = L_mac(L_sum, im_tmp, im_tmp);
++			// error < 2^30 and each square is at most 2^30.
++			error += (UWord32)((Word32)re_tmp * re_tmp) +
++			         (UWord32)((Word32)im_tmp * im_tmp);
+ 		}
++		const Word32 L_sum = error >= limit ? L_diff_min : (Word32)(error * 2u);
+ 
+ 		if(L_sum < L_diff_min)
+ 		{
+--- a/uv_synt.cc
++++ b/uv_synt.cc
+@@ -36,7 +36,6 @@
+ 
+ void imbe_vocoder_impl::uv_synt_init(void)
+ {
+-	fft_init();
+ 	v_zap(uv_mem, 105);
+ }
+ 
+@@ -47,7 +46,7 @@
+ 
+ void imbe_vocoder_impl::uv_synt(IMBE_PARAM *imbe_param, Word16 *snd)
+ {
+-	Cmplx16 Uw[FFTLENGTH];
++	Cmplx16 *Uw = fft_buf;
+ 	Word16 i, index_a, index_b, index_aux, ha, hb, *v_uv_dsn_ptr, *sa_ptr, sa;
+     Word32 fund_freq, fund_freq_2, fund_freq_acc_a, fund_freq_acc_b;
+ 
+@@ -56,7 +55,7 @@
+ 	fund_freq    = imbe_param->fund_freq;
+ 	fund_freq_2  = L_shr(fund_freq, 1);
+ 
+-	v_zap((Word16 *)&Uw, 2 * FFTLENGTH);
++	v_zap((Word16 *)Uw, 2 * FFTLENGTH);
+ 
+ 	fund_freq_acc_a = L_sub(fund_freq, fund_freq_2);
+ 	fund_freq_acc_b = L_add(fund_freq, fund_freq_2);
+@@ -117,7 +116,9 @@
+ */
+ 
+ 
+-	fft((Word16 *)&Uw, FFTLENGTH, -1);
++	// An entirely voiced frame has an empty noise spectrum.
++	if (imbe_param->l_uv != 0)
++		fft((Word16 *)Uw, -1);
+ 
+ 	for(i = 0; i < 105; i++)
+ 		snd[i] = uv_mem[i];
+--- a/uv_synt.h
++++ b/uv_synt.h
+@@ -24,6 +24,5 @@
+ 
+ void uv_synt_init(void);
+ void uv_synt(IMBE_PARAM *imbe_param, Word16 *snd);
+-void fft(Word16 *datam1, Word16 nn, Word16 isign);
+ 
+ #endif
+--- a/v_synt.cc
++++ b/v_synt.cc
+@@ -56,11 +56,38 @@
+ }
+ 
+ 
++static UWord32 add_voiced(Word32 *output, int count, Word16 amplitude,
++                          UWord32 phase, UWord32 step)
++{
++    for (int sample = 0; sample < count; ++sample)
++    {
++        // Cosine is bounded by +/-32767, so the product needs no clamp.
++        const Word32 term = (Word32)amplitude * cos_fxp(extract_h((Word32)phase));
++        output[sample] = L_add(output[sample], term);
++        phase += step;
++    }
++    return phase;
++}
++
++static UWord32 add_voiced_fade(Word32 *output, Word16 amplitude, UWord32 phase,
++                               UWord32 step, int window, int direction)
++{
++    for (int sample = 0; sample < 49; ++sample)
++    {
++        const Word32 weighted = L_mult(ws[window], amplitude);
++        const Word32 term = L_mpy_ls(weighted, cos_fxp(extract_h((Word32)phase))) >> 1;
++        output[sample] = L_add(output[sample], term);
++        phase += step;
++        window += direction;
++    }
++    return phase;
++}
++
+ void imbe_vocoder_impl::v_synt(IMBE_PARAM *imbe_param, Word16 *snd)
+ {
+-	Word32 L_tmp, L_tmp1, fund_freq, L_snd[FRAME], L_ph_acc, L_ph_step;
+-	Word32 L_ph_acc_aux, L_ph_step_prev, L_amp_acc, L_amp_step, L_ph_step_aux;
+-	Word16 num_harms, i, j, *vu_dsn, *sa, *s_ptr, *s_ptr_aux, num_harms_max, num_harms_max_4;
++	Word32 L_tmp, fund_freq, L_snd[FRAME], L_ph_acc, L_ph_step;
++	Word32 L_ph_step_prev, L_amp_acc, L_amp_step;
++	Word16 num_harms, i, j, *vu_dsn, *sa, num_harms_max, num_harms_max_4;
+ 	UWord32 ph_mem_prev[NUM_HARMS_MAX], dph[NUM_HARMS_MAX];
+ 	Word16 num_harms_inv, num_harms_sh, num_uv;
+ 	Word16 freq_flag;
+@@ -121,119 +148,46 @@
+ 		if(vu_dsn[i] == 0 && vu_dsn_prev[i] == 0)
+ 			continue;
+ 
+-		if(vu_dsn[i] == 1 && vu_dsn_prev[i] == 0)  // unvoiced => voiced
+-		{
+-			s_ptr = (Word16 *)ws;
+-			L_ph_acc = ph_mem[i] - ((UWord32)((L_ph_step >> 7) * 104) << 7);
+-			for(j = 56; j <= 104; j++)
+-			{
+-				L_tmp = L_mult(*s_ptr++, sa[i]);
+-				L_tmp = L_mpy_ls(L_tmp, cos_fxp(extract_h(L_ph_acc)));
+-				L_tmp = L_shr(L_tmp, 1);
+-				L_snd[j] = L_add(L_snd[j], L_tmp);
+-				L_ph_acc = (Word32)((UWord32)L_ph_acc + (UWord32)L_ph_step);
+-			}
+-
+-			for(j = 105; j <= 159; j++)
+-			{
+-				L_tmp = L_mult(sa[i], cos_fxp(extract_h(L_ph_acc)));
+-				L_tmp = L_shr(L_tmp, 1);
+-				L_snd[j] = L_add(L_snd[j], L_tmp);
+-				L_ph_acc = (Word32)((UWord32)L_ph_acc + (UWord32)L_ph_step);
+-			}
+-			continue;
+-		}
+-
+- 
+-		if(vu_dsn[i] == 0 && vu_dsn_prev[i] == 1)  // voiced => unvoiced
+-		{
+-			s_ptr = (Word16 *)&ws[48];
+-			L_ph_acc = ph_mem_prev[i];
+-
+-			for(j = 0; j <= 55; j++)
+-			{
+-				L_tmp = L_mult(sa_prev3[i], cos_fxp(extract_h(L_ph_acc)));
+-				L_tmp = L_shr(L_tmp, 1);
+-				L_snd[j] = L_add(L_snd[j], L_tmp);
+-				L_ph_acc = (Word32)((UWord32)L_ph_acc + (UWord32)L_ph_step_prev);
+-			}
+-
+-			for(j = 56; j <= 104; j++)
+-			{
+-				L_tmp = L_mult(*s_ptr--, sa_prev3[i]);
+-				L_tmp = L_mpy_ls(L_tmp, cos_fxp(extract_h(L_ph_acc)));
+-				L_tmp = L_shr(L_tmp, 1);
+-				L_snd[j] = L_add(L_snd[j], L_tmp);
+-				L_ph_acc = (Word32)((UWord32)L_ph_acc + (UWord32)L_ph_step_prev);
+-			}
+-			continue;
+-		}
+-
+-		if(i >=7 || freq_flag)
+-		{
+-			s_ptr_aux     = (Word16 *)&ws[48];
+-			L_ph_acc_aux  = ph_mem_prev[i];
+-
+-			s_ptr    = (Word16 *)ws;
+-			L_ph_acc = ph_mem[i] - ((UWord32)((L_ph_step >> 7) * 104) << 7);
+-
+-			for(j = 0; j <= 55; j++)
+-			{
+-				L_tmp = L_mult(sa_prev3[i], cos_fxp(extract_h(L_ph_acc_aux)));
+-				L_tmp = L_shr(L_tmp, 1);
+-				L_snd[j] = L_add(L_snd[j], L_tmp);
+-				L_ph_acc_aux = (Word32)((UWord32)L_ph_acc_aux + (UWord32)L_ph_step_prev);
+-			}
+-
+-			for(j = 56; j <= 104; j++)
+-			{
+-				L_tmp = L_mult(*s_ptr_aux--, sa_prev3[i]);
+-				L_tmp = L_mpy_ls(L_tmp, cos_fxp(extract_h(L_ph_acc_aux)));
+-				L_tmp = L_shr(L_tmp, 1);
+-				L_snd[j] = L_add(L_snd[j], L_tmp);
+-
+-				L_tmp = L_mult(*s_ptr++, sa[i]);
+-				L_tmp = L_mpy_ls(L_tmp, cos_fxp(extract_h(L_ph_acc)));
+-				L_tmp = L_shr(L_tmp, 1);
+-				L_snd[j] = L_add(L_snd[j], L_tmp);
+-
+-				L_ph_acc_aux = (Word32)((UWord32)L_ph_acc_aux + (UWord32)L_ph_step_prev);
+-				L_ph_acc = (Word32)((UWord32)L_ph_acc + (UWord32)L_ph_step);
+-			}
+-
+-			for(j = 105; j <= 159; j++)
+-			{
+-				L_tmp = L_mult(sa[i], cos_fxp(extract_h(L_ph_acc)));
+-				L_tmp = L_shr(L_tmp, 1);
+-				L_snd[j] = L_add(L_snd[j], L_tmp);
+-				L_ph_acc = (Word32)((UWord32)L_ph_acc + (UWord32)L_ph_step);
+-			}
+-			continue;
+-		}
+-	
++        if (vu_dsn[i] != vu_dsn_prev[i] || i >= 7 || freq_flag)
++        {
++            // For an overlap, add the old contribution first at each
++            // sample to preserve the order of the saturating adds.
++            if (vu_dsn_prev[i])
++            {
++                const UWord32 old_phase = add_voiced(L_snd, 56, sa_prev3[i],
++                                                      ph_mem_prev[i], L_ph_step_prev);
++                add_voiced_fade(L_snd + 56, sa_prev3[i], old_phase, L_ph_step_prev, 48, -1);
++            }
++            if (vu_dsn[i])
++            {
++                const UWord32 start = ph_mem[i] - ((UWord32)((L_ph_step >> 7) * 104) << 7);
++                const UWord32 new_phase = add_voiced_fade(L_snd + 56, sa[i], start, L_ph_step, 0, 1);
++                add_voiced(L_snd + 105, FRAME - 105, sa[i], new_phase, L_ph_step);
++            }
++            continue;
++        }
++
+ 		L_amp_step = L_mpy_ls(L_shr(L_deposit_h(sub(sa[i], sa_prev3[i])), 4 + 1), CNST_0_1_Q1_15); // (sa[i] - sa_prev3[i]) / 160, 1/160 = 0.1/16 
+ 		L_amp_acc  = L_shr(L_deposit_h(sa_prev3[i]), 1);
+ 
+ 		
+-		L_ph_step_aux = L_mpy_ls(L_shr(fund_freq - fund_freq_prev, 4 + 1), CNST_0_1_Q1_15);       // (fund_freq - fund_freq_prev)/(2*160)
+-		L_ph_step_aux = (Word32)((UWord32)((L_ph_step_aux >> 7) * (i + 1)) << 7);
+-
+-		L_ph_acc = ph_mem_prev[i];
+-
+-		L_tmp1 = L_mpy_ls(L_shr(dph[i], 4), CNST_0_1_Q1_15);  // dph[i] / 160
+-					
+-		for(j = 0; j < 160; j++)
+-		{
+-			L_ph_acc_aux = (Word32)((UWord32)((L_ph_step_aux >> 9) * j) << 9); 
+-			L_ph_acc_aux = (Word32)((UWord32)((L_ph_acc_aux >> 9) * j) << 9); 
+-
+-			L_tmp = L_mpy_ls(L_amp_acc, cos_fxp(extract_h((Word32)((UWord32)L_ph_acc + (UWord32)L_ph_acc_aux))));			
+-			L_snd[j] = L_add(L_snd[j], L_tmp);
+-
+-			L_amp_acc = L_add(L_amp_acc, L_amp_step);
+-			L_ph_acc = (Word32)((UWord32)L_ph_acc + (UWord32)L_ph_step_prev);
+-			L_ph_acc = (Word32)((UWord32)L_ph_acc + (UWord32)L_tmp1);
+-		}
++        const Word32 bend = L_mpy_ls(L_shr(fund_freq - fund_freq_prev, 5), CNST_0_1_Q1_15);
++        const UWord32 unit = (UWord32)(((bend >> 7) * (i + 1)) >> 2) << 9;
++        const UWord32 step = (UWord32)L_ph_step_prev +
++                             (UWord32)L_mpy_ls(L_shr(dph[i], 4), CNST_0_1_Q1_15);
++        UWord32 phase = ph_mem_prev[i];
++        UWord32 increment = step + unit;
++
++        // The old phase correction was unit * j * j modulo 2^32.
++        // Consecutive corrections differ by unit * (2*j + 1).
++        for (j = 0; j < FRAME; ++j)
++        {
++            L_tmp = L_mpy_ls(L_amp_acc, cos_fxp(extract_h((Word32)phase)));
++            L_snd[j] = L_add(L_snd[j], L_tmp);
++            L_amp_acc = L_add(L_amp_acc, L_amp_step);
++            phase += increment;
++            increment += 2u * unit;
++        }
+ 	}
+ 
+ 	for(i = 0; i < FRAME; i++)

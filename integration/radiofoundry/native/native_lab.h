@@ -20,6 +20,8 @@ int native_lab_voice_release(uint32_t session);
 /* Ordinary radio requests interrupt a test. Internal RX-audio consumes PTT
  * edges (including a shared programming-jack transition) without aborting;
  * no PTT request may turn an interrupted test into normal FM transmit. */
+/* WAIT retains the same request in the radio task until RF/worker release. */
+enum { NATIVE_REQUEST_WAIT=2 };
 int native_lab_request(radio_sm_t *, const radio_req_t *);
 size_t native_lab_command(const uint8_t *, uint16_t, uint8_t *, size_t);
 /* Local mic/PTT owner. Cable ARM cannot select this audio mode. */

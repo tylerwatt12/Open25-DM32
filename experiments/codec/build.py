@@ -50,7 +50,7 @@ def main():
     p.add_argument("--c-compiler", default=os.environ.get("CC", "clang"))
     p.add_argument("--out", type=Path)
     p.add_argument("--target", action="store_true", help="compile CK803S objects/archive only, using repository native crosscompiler; no target libc or firmware")
-    p.add_argument("--speed", action="store_true", help="O3 unity build so fixed-point DSP helpers can inline across source files")
+    p.add_argument("--speed", action="store_true", help="bit-exact DSP fast paths and unity build")
     args = p.parse_args()
     deps = prepare()
     out = (args.out or HERE / "out" / ("ck803s" if args.target else "ubsan" if args.full_ubsan else "sanitize" if args.sanitize else "release")).resolve()
@@ -59,7 +59,7 @@ def main():
     portable.mkdir(exist_ok=True)
     for path in (deps / "imbe_vocoder").iterdir():
         if path.suffix in (".cc", ".h"):
-            shutil.copyfile(path, portable / path.name)
+            (portable / path.name).write_bytes(path.read_text().encode())
     # The pristine library left rand_gen global even though it already has a
     # seed member. Make that routine use its caller's existing state. No DSP
     # algorithm or wire representation changes.
@@ -116,6 +116,15 @@ def main():
             raise SystemExit(f"Arithmetic patch mismatch in v_synt.cc: {old}")
         source = source.replace(old, new)
     path.write_text(source)
+    # Loud inputs can overflow the pitch-score product. Preserve the
+    # production two's-complement result under the sanitizer too.
+    path = portable / "pitch_est.cc"
+    source = path.read_text()
+    old = "L_tmp = L_tmp * index_step;"
+    if source.count(old) != 1:
+        raise SystemExit("Arithmetic patch mismatch in pitch_est.cc")
+    path.write_text(source.replace(old, "L_tmp = (Word32)((UWord32)L_tmp * (UWord32)index_step);"))
+
     path = portable / "imbe_vocoder_impl.h"
     source = path.read_text()
     marker = "\t/* member functions */"
@@ -159,75 +168,6 @@ def main():
     path.write_text(source.replace('Use pointer indexed from 1 instead of 0',
                                    'One-based FFT loop indices translated at each array access'))
 
-    if args.speed:
-        # The shifted dot product is bounded by the full window energy plus
-        # one rounding unit per sample. Retain the original saturating path
-        # when that bound cannot guarantee every partial sum fits.
-        path = portable / "pitch_est.cc"
-        source = path.read_text()
-        start = "\t// Windowing input signal s * wi^2\n\tfor(i = 0 ; i < PITCH_EST_FRAME; i++)\n\t\tsig_wndwed[i] = mult_r(sigin[i], wi[i]);"
-        end = "\t\tcorr[i] = autocorr(sig_wndwed, tmp, scale_shift);"
-        if source.count(start) != 1 or source.count(end) != 1:
-            raise SystemExit("Pitch correlation optimization patch mismatch")
-        source = source.replace(start, """\tbool full_negative = false;
-\tfor(i = 0; i < PITCH_EST_FRAME; i++) {
-\t\tsig_wndwed[i] = mult_r(sigin[i], wi[i]);
-\t\tfull_negative |= sig_wndwed[i] == -32768;
-\t}""")
-        source = source.replace(end, """\t{
-\t\tif(full_negative || L_e0 > MAX_32 - PITCH_EST_FRAME) {
-\t\t\tcorr[i] = autocorr(sig_wndwed, tmp, scale_shift);
-\t\t\tcontinue;
-\t\t}
-\t\tWord32 sum = 0;
-\t\tconst int count = PITCH_EST_FRAME - tmp;
-\t\tif(scale_shift == 0) {
-\t\t\tfor(int k = 0; k < count; k++)
-\t\t\t\tsum += (Word32)sig_wndwed[k] * sig_wndwed[k + tmp] * 2;
-\t\t} else {
-\t\t\tfor(int k = 0; k < count; k++)
-\t\t\t\tsum += ((Word32)sig_wndwed[k] * sig_wndwed[k + tmp]) >> 4;
-\t\t}
-\t\tcorr[i] = sum;
-\t}""")
-        path.write_text(source)
-
-        # Two of the three pitch windows are unchanged when the input advances
-        # by FRAME. Keep their scores and only the newest window's PCM. The
-        # saved PCM storage offsets the cache within the existing context.
-        for name, replacements in {
-            'imbe_vocoder_impl.h': [
-                ('Word16 pitch_est_buf[PITCH_EST_BUF_SIZE];',
-                 'Word16 pitch_est_buf[PITCH_EST_FRAME];\n\tWord16 pitch_scores[2][203];'),
-            ],
-            'encode.cc': [
-                ('v_zap(pitch_est_buf, PITCH_EST_BUF_SIZE);', 'v_zap(pitch_est_buf, PITCH_EST_FRAME);'),
-                ('\t\tpitch_est_buf[i] = pitch_est_buf[i + FRAME];\n', ''),
-                ('\tpe_lpf(', '\tfor(i = 0; i < PITCH_EST_FRAME - FRAME; i++)\n'
-                 '\t\tpitch_est_buf[i] = pitch_est_buf[i + FRAME];\n\tpe_lpf('),
-                ('&pitch_est_buf[PITCH_EST_BUF_SIZE - FRAME]', '&pitch_est_buf[PITCH_EST_FRAME - FRAME]'),
-            ],
-            'pitch_est.cc': [
-                ('prev_e_p = prev_prev_e_p = 0;',
-                 'prev_e_p = prev_prev_e_p = 0;\n\t// The two leading windows contain only zero samples.\n'
-                 '\tfor(int i = 0; i < 203; i++)\n\t\tpitch_scores[0][i] = pitch_scores[1][i] = CNST_1_00_Q4_12;'),
-                ('Word16 e_p_arr0[203], e_p_arr1[203], e_p_arr2[203], e1p1_e2p2_est_save[203];',
-                 'Word16 e_p_arr0[203], e1p1_e2p2_est_save[203];\n'
-                 '\tWord16 *e_p_arr1 = pitch_scores[0], *e_p_arr2 = pitch_scores[1];'),
-                ('\t// Calculate E(p) function for current and two future frames\n\te_p(&frames_buf[0], e_p_arr0);',
-                 '\tmemcpy(e_p_arr0, e_p_arr1, sizeof e_p_arr0);\n'
-                 '\tmemcpy(e_p_arr1, e_p_arr2, sizeof e_p_arr0);\n\te_p(frames_buf, e_p_arr2);'),
-                ('\te_p(&frames_buf[FRAME],     e_p_arr1);\n\te_p(&frames_buf[2 * FRAME], e_p_arr2);\n', ''),
-            ],
-        }.items():
-            path = portable / name
-            source = path.read_text()
-            for old, new in replacements:
-                if source.count(old) != 1:
-                    raise SystemExit(f"Rolling pitch window patch mismatch in {name}")
-                source = source.replace(old, new)
-            path.write_text(source)
-
     # Remove upstream dead locals (only constant/plain assignments, no DSP
     # calls or global arithmetic flags) and repair its misspelled header guard.
     for name, replacements in {
@@ -246,6 +186,10 @@ def main():
                 raise SystemExit(f"Dead-local patch mismatch: {name}: {old}")
             source = source.replace(old, new)
         path.write_text(source)
+
+    if args.speed:
+        run(["git", "apply", ROOT / "src" / "codec" / "imbe-speed.patch"],
+            cwd=portable, env={**os.environ, "GIT_CEILING_DIRECTORIES": str(out)})
 
     # mbelib's interpolation reads log2Ml[57] at the last harmonic when L=56,
     # even though its weight is zero. Clamp the upper neighbor at the endpoint
@@ -273,7 +217,7 @@ def main():
                     tofile=generated + "/" + path.name))
     (out / "portability.patch").write_text("".join(patches))
 
-    common = ["-O3" if args.speed else "-O2", "-g", "-fwrapv", "-fno-strict-aliasing", "-fstack-usage", "-Wall", "-Wextra",
+    common = ["-O3" if args.speed and not args.target else "-O2", "-g", "-fwrapv", "-fno-strict-aliasing", "-fstack-usage", "-Wall", "-Wextra",
               "-ffile-prefix-map=" + str(ROOT) + "=.",
               "-fdebug-prefix-map=" + str(ROOT) + "=.",
               "-ffile-prefix-map=" + str(out) + "=/generated-codec",
@@ -350,11 +294,11 @@ def main():
         "compiler": subprocess.check_output([args.compiler, "--version"], text=True),
         "flags": [str(x) for x in cxx],
         "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-        "arithmetic": "twos-complement and arithmetic signed right shift required; explicit unsigned modulo phase arithmetic and saturation intermediates; -fwrapv is defensive; full UBSan audited with -fno-wrapv",
+        "arithmetic": "twos-complement and arithmetic signed right shift required; explicit unsigned modulo phase and pitch arithmetic and saturation intermediates; -fwrapv is defensive; full UBSan audited with -fno-wrapv",
         "rng_patch": "global synthesis PRNG changed to pre-existing per-context seed; pristine sources unchanged",
         "fault_patch": "div_s reports a bounded operation failure instead of printing/aborting",
         "reference_patch": "mbelib last-harmonic interpolation endpoint clamped to avoid index57 UB",
-        "arithmetic_patch": "intentional modulo phase arithmetic and saturating-operation temporaries use explicit unsigned arithmetic",
+        "arithmetic_patch": "intentional modulo phase and pitch arithmetic and saturating-operation temporaries use explicit unsigned arithmetic",
     }
     (out / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(executable)

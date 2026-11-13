@@ -32,7 +32,7 @@ typedef struct {
     uint8_t head, tail, count, voice_count, next_duid;
     uint8_t transmitting, started, stopping, terminator_pending, fault;
     uint8_t crypto_clear, have_group;
-    uint32_t rx_frames, rx_muted, rx_erasures, tx_frames, tx_underruns;
+    uint32_t rx_frames, rx_voice, rx_muted, rx_erasures, tx_frames, tx_underruns;
     uint32_t (*micros)(void); /* optional task-level profiling, no clock assumption */
     uint32_t fec_max_us, imbe_max_us;
 } p25_voice;

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Reproducible, local GPL-compatible RadioFoundry P25 laboratory derivative.
+"""Reproducible, local GPL-compatible RadioFoundry conventional P25 derivative.
 
 Never opens a serial port, flashes a radio or modifies the pristine checkout.
-Includes bounded native-PHY RF experiments, not an operational P25 voice mode.
+Classic provides FM, DMR and saved conventional P25 channels.
 """
 import argparse
 import hashlib
@@ -17,7 +17,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from tools import codec_cache
+from tools import codec_cache, classic_channels
 UP = ROOT / "research/upstream/radiofoundry"
 PIN = "dfbaf20c400c73e2ccf6edb80af7d1d255bee418"
 DEST = ROOT / "build/radiofoundry-p25"
@@ -47,8 +47,10 @@ def write_owned(path, content, original=None):
 def transform(relative, replacements):
     original = (UP / relative).read_bytes()
     content = original.decode()
-    for old, new in replacements:
-        if content.count(old) != 1:
+    for entry in replacements:
+        old,new=entry[:2]
+        expected=entry[2] if len(entry)==3 else 1
+        if content.count(old) != expected:
             raise SystemExit(f"Pinned patch mismatch: {relative}: {old}")
         content = content.replace(old, new)
     write_owned(DEST / relative, content.encode(), original)
@@ -65,8 +67,12 @@ def prepare():
     if git(DEST, "rev-parse", "HEAD") != PIN:
         raise SystemExit("Refusing incompatible derivative HEAD")
     run(["git", "-C", DEST, "submodule", "update", "--init", "third_party/FreeRTOS-Kernel"])
-    transform("config/features.mk", [("# Dependencies\n", "CONFIG_P25 ?= n\nCONFIG_P25_NATIVE ?= n\nCONFIG_FIRSTBOOT ?= n\nCONFIG_P25_BENCH ?= y\nCONFIG_CPU_PROFILE ?= n\nCONFIG_DEV_UPDATE ?= n\nCONFIG_DEV_TX ?= n\nFEATURES += P25 P25_NATIVE FIRSTBOOT P25_BENCH CPU_PROFILE DEV_UPDATE DEV_TX\nifeq ($(CONFIG_DEV_TX),y)\nifneq ($(CONFIG_FIRSTBOOT)$(CONFIG_DEV_UPDATE)$(CONFIG_P25_NATIVE),yyy)\n$(error DEV_TX requires FIRSTBOOT=y DEV_UPDATE=y P25_NATIVE=y)\nendif\nendif\nifeq ($(CONFIG_DEV_UPDATE),y)\nifneq ($(CONFIG_FIRSTBOOT)$(CONFIG_STUB_ENTRY),yy)\n$(error DEV_UPDATE requires FIRSTBOOT=y STUB_ENTRY=y)\nendif\nendif\nifeq ($(CONFIG_FIRSTBOOT),y)\nifneq ($(CONFIG_CPS_OPENFW)$(CONFIG_CPS_FAST),nn)\n$(error FIRSTBOOT requires CPS_OPENFW=n CPS_FAST=n)\nendif\nifneq ($(CONFIG_STUB_ENTRY),$(CONFIG_DEV_UPDATE))\n$(error FIRSTBOOT requires STUB_ENTRY to match DEV_UPDATE)\nendif\nendif\nifeq ($(CONFIG_P25_NATIVE),y)\nifneq ($(CONFIG_P25)$(CONFIG_DMR),yy)\n$(error P25_NATIVE needs P25=y and DMR=y)\nendif\nendif\n\n# Dependencies\n")])
-    transform("core/config.h", [("#define RFOUNDRY_CONFIG_H\n", "#define RFOUNDRY_CONFIG_H\n#ifndef CONFIG_P25\n#define CONFIG_P25 0\n#endif\n#ifndef CONFIG_P25_NATIVE\n#define CONFIG_P25_NATIVE 0\n#endif\n#ifndef CONFIG_P25_BENCH\n#define CONFIG_P25_BENCH 1\n#endif\n#ifndef CONFIG_DEV_UPDATE\n#define CONFIG_DEV_UPDATE 0\n#endif\n#ifndef CONFIG_DEV_TX\n#define CONFIG_DEV_TX 0\n#endif\n#ifndef CONFIG_CPU_PROFILE\n#define CONFIG_CPU_PROFILE 0\n#endif\n#ifndef CONFIG_FIRSTBOOT\n#define CONFIG_FIRSTBOOT 0\n#endif\n#if CONFIG_FIRSTBOOT\n#include \"firstboot/firstboot.h\"\n#endif\n")])
+    transform("config/features.mk", [
+        ('# Dependencies\n', 'CONFIG_P25 ?= n\nCONFIG_P25_NATIVE ?= n\nCONFIG_FIRSTBOOT ?= n\nCONFIG_P25_BENCH ?= y\nCONFIG_CPU_PROFILE ?= n\nCONFIG_DEV_UPDATE ?= n\nCONFIG_DEV_TX ?= n\nCONFIG_P25_CHANNELS ?= n\nFEATURES += P25 P25_NATIVE FIRSTBOOT P25_BENCH CPU_PROFILE DEV_UPDATE DEV_TX P25_CHANNELS\nifeq ($(CONFIG_DEV_TX),y)\nifneq ($(CONFIG_P25_NATIVE),y)\n$(error DEV_TX requires P25_NATIVE=y)\nendif\nendif\nifeq ($(CONFIG_DEV_UPDATE),y)\nifneq ($(CONFIG_FIRSTBOOT)$(CONFIG_STUB_ENTRY),yy)\n$(error DEV_UPDATE requires FIRSTBOOT=y STUB_ENTRY=y)\nendif\nendif\nifeq ($(CONFIG_FIRSTBOOT),y)\nifneq ($(CONFIG_CPS_OPENFW)$(CONFIG_CPS_FAST),nn)\n$(error FIRSTBOOT requires CPS_OPENFW=n CPS_FAST=n)\nendif\nifneq ($(CONFIG_STUB_ENTRY),$(CONFIG_DEV_UPDATE))\n$(error FIRSTBOOT requires STUB_ENTRY to match DEV_UPDATE)\nendif\nendif\nifeq ($(CONFIG_P25_NATIVE),y)\nifneq ($(CONFIG_P25)$(CONFIG_DMR),yy)\n$(error P25_NATIVE needs P25=y and DMR=y)\nendif\nendif\n\n# Dependencies\n'),
+    ])
+    transform("core/config.h", [
+        ('#define RFOUNDRY_CONFIG_H\n', '#define RFOUNDRY_CONFIG_H\n#ifndef CONFIG_P25_CHANNELS\n#define CONFIG_P25_CHANNELS 0\n#endif\n#ifndef CONFIG_P25\n#define CONFIG_P25 0\n#endif\n#ifndef CONFIG_P25_NATIVE\n#define CONFIG_P25_NATIVE 0\n#endif\n#ifndef CONFIG_P25_BENCH\n#define CONFIG_P25_BENCH 1\n#endif\n#ifndef CONFIG_DEV_UPDATE\n#define CONFIG_DEV_UPDATE 0\n#endif\n#ifndef CONFIG_DEV_TX\n#define CONFIG_DEV_TX 0\n#endif\n#ifndef CONFIG_CPU_PROFILE\n#define CONFIG_CPU_PROFILE 0\n#endif\n#ifndef CONFIG_FIRSTBOOT\n#define CONFIG_FIRSTBOOT 0\n#endif\n#if CONFIG_FIRSTBOOT\n#include "firstboot/firstboot.h"\n#endif\n'),
+    ])
     transform("Makefile", [
         ("APP_DIRS := $(CORE_DIRS)", "ifeq ($(CONFIG_P25),y)\nCORE_DIRS += core/p25\nP25_LIB := core/p25/libdm32_imbe.a\nendif\nifeq ($(CONFIG_P25_NATIVE),y)\nCORE_DIRS += core/native_modem\nendif\nifeq ($(CONFIG_FIRSTBOOT),y)\nCORE_DIRS += core/firstboot\nendif\nAPP_DIRS := $(CORE_DIRS)"),
         ("INCLUDES := -Ihal", "INCLUDES := -Icore/p25 -Icore/native_modem -Ihal"),
@@ -83,10 +89,11 @@ def prepare():
         ("case DL_CMD_PING:", "case 0x22: /* private derivative: immutable first-boot restrictions */\n#if CONFIG_FIRSTBOOT\n\t\treturn firstboot_command(req, len, out, cap);\n#else\n\t\treturn status_only(out, DL_ST_UNAVAILABLE);\n#endif\n\tcase 0x21: /* private derivative: bounded native PHY experiment */\n#if CONFIG_P25_NATIVE\n\t\treturn native_lab_command(req, len, out, cap);\n#else\n\t\treturn status_only(out, DL_ST_UNAVAILABLE);\n#endif\n\tcase 0x20: /* private derivative: offline P25 laboratory */\n#if CONFIG_P25\n\t\treturn p25_lab_command(req, len, out, cap);\n#else\n\t\treturn status_only(out, DL_ST_UNAVAILABLE);\n#endif\n\tcase DL_CMD_PING:"),
     ])
     transform("core/stubentry/stub_entry.c", [
-        ('#include "config.h"', '#include "config.h"\n#if CONFIG_DEV_UPDATE\n#include "native_modem/native_lab.h"\n#include "p25/p25_lab.h"\n#endif'),
+        ('#include "config.h"', '#include "config.h"\n#if CONFIG_DEV_UPDATE || CONFIG_P25_CHANNELS\n#include "native_modem/native_lab.h"\n#include "p25/p25_lab.h"\n#endif'),
+        ('size_t stub_entry_request(const uint8_t *req, uint16_t len, uint8_t *out, size_t cap)\n{', 'size_t stub_entry_request(const uint8_t *req, uint16_t len, uint8_t *out, size_t cap)\n{\n#if CONFIG_P25_CHANNELS\n\tif (native_lab_reserved() || p25_lab_busy()) { if (!cap) return 0; out[0] = DL_ST_BUSY; return 1; }\n#endif'),
         ('\tconst hal_system_t *s = sys();\n\n\tif (s == NULL)', '#if CONFIG_DEV_UPDATE\n\tif (cap < STUB_REPLY_MAX) { out[0]=DL_ST_BAD_ARG;return 1; }\n\tif (!firstboot_update_busy() && (native_lab_reserved() || p25_lab_busy())) { out[0]=DL_ST_BUSY;return 1; }\n\tif (!firstboot_update_request(req,len)) { out[0]=DL_ST_REFUSED;return 1; }\n#endif\n\tconst hal_system_t *s = sys();\n\n\tif (s == NULL)'),
         ('\tif (!ready) {', '#if CONFIG_DEV_UPDATE\n\tif (req && len && req[0]==STUB_OP_BEGIN) { uint32_t size=0;(void)s->stub_region(&size); }\n#endif\n\tif (!ready) {'),
-        ('\tif (on_air()) {\t\t\t\t// PTT went down after the ENTER was accepted', '#if CONFIG_DEV_UPDATE\n\tif (!firstboot_update_busy())return;\n#endif\n\tif (on_air()) {\t\t\t\t// PTT went down after the ENTER was accepted'),
+        ('\tif (on_air()) {\t\t\t\t// PTT went down after the ENTER was accepted', '#if CONFIG_DEV_UPDATE\n\tif (!firstboot_update_busy())return;\n#endif\n#if CONFIG_P25_CHANNELS\n\tif (native_lab_reserved() || p25_lab_busy()) return;\n#endif\n\tif (on_air()) {\t\t\t\t// PTT went down after the ENTER was accepted'),
     ])
     transform("platform/hrc7000/system.c", [
         ('\t.enter_stub = enter_stub,', '\t.enter_stub = enter_stub,\n#if CONFIG_DEV_UPDATE\n\t.stub_image_ok = firstboot_stub_image_ok,\n#endif'),
@@ -106,8 +113,14 @@ def prepare():
         ('\t.spk_pending = hrc_audio_pcm_spk_pending,', '\t.spk_pending = hrc_audio_pcm_spk_pending,\n#if CONFIG_P25\n\t.playback_pace = playback_pace,\n\t.playback_stats = playback_stats,\n#endif'),
     ])
     write_owned(DEST / "platform/hrc7000/pcm_playback.inc", (ROOT / "integration/radiofoundry/pcm_playback.inc").read_bytes())
-    transform("boards/dm32/board.c", [(".radio = &dm32_radio,", ".radio = &dm32_radio,\n#if CONFIG_P25_NATIVE\n\t.native_modem = &dm32_native_ops,\n#endif\n#if CONFIG_DEV_TX\n\t.native_mic_route = dm32_native_mic_route,\n#endif"),
-        ('#include "pins.h"', '#include "pins.h"\n#include "dm32_firstboot.inc"')])
+    transform("boards/dm32/board.c", [
+        ('const board_t board = {', '#if CONFIG_P25_CHANNELS\nstatic uint32_t dm32_cps_type(void) { return 11; }\nstatic const hal_cps_t dm32_cps = { .radio_type = dm32_cps_type };\n#endif\nconst board_t board = {'),
+        ('\t.system = &hrc_system,', '\t.system = &hrc_system,\n#if CONFIG_P25_CHANNELS\n\t.cps = &dm32_cps,\n#endif'),
+        ('.radio = &dm32_radio,', '.radio = &dm32_radio,\n#if CONFIG_P25_NATIVE\n\t.native_modem = &dm32_native_ops,\n#endif\n#if CONFIG_DEV_TX\n\t.native_mic_route = dm32_native_mic_route,\n#endif'),
+        ('#include "pins.h"', '#include "pins.h"\n#include "dm32_firstboot.inc"'),
+        ('static const hrc_gps_cfg_t gps_cfg = {', '#if CONFIG_GPS\nstatic const hrc_gps_cfg_t gps_cfg = {'),
+        ('\t.power_on_level = GPS_POWER_ON_LEVEL,\n};', '\t.power_on_level = GPS_POWER_ON_LEVEL,\n};\n#endif'),
+    ])
     transform("boards/dm32/dm32.h", [("#include <stdbool.h>", "#include <stdbool.h>\n#if CONFIG_P25_NATIVE\n#include \"native_test.h\"\nextern nt_ops dm32_native_ops;\n#endif\n#if CONFIG_DEV_TX\nvoid dm32_native_mic_route(bool on);\n#endif")])
     transform("boards/dm32/radio_dm32.c", [
         ("static void pa_key(void)\n{", "static void pa_key(void)\n{\n#if CONFIG_FIRSTBOOT\n\tif (!firstboot_tx_allowed(FB_PA_KEY)) { firstboot_deny(FB_PA_KEY); board_rf_safe(); return; }\n#endif"),
@@ -147,19 +160,19 @@ def prepare():
         ("*dmr_glue.o(.text .text.*)", "*dmr_glue.o(.text .text.*)\n\t\t*native_test.o(.text .text.*)\n\t\t*hrc_native_chip.o(.text .text.*)\n\t\t*hrc_native_port.o(.text .text.*)"),
     ])
     transform("core/input/input_task.c", [
-        ('static void input_task(void *arg)', '#if CONFIG_DEV_TX\nstatic const keymap_entry_t *key_for(uint8_t action, bool long_action);\nstatic volatile bool physical_ptt;\nbool input_physical_ptt(void) { return physical_ptt; }\n#endif\n\nstatic void input_task(void *arg)'),
+        ('static void input_task(void *arg)', '#if CONFIG_DEV_TX\nstatic const keymap_entry_t *key_for(uint8_t action, bool long_action);\nstatic volatile bool physical_ptt;\nbool input_physical_ptt(void) { return physical_ptt; }\nbool input_ptt_down(void)\n{\n    uint32_t now=hal_millis();\n    taskENTER_CRITICAL();\n    bool down=!ptt_blocked && (physical_ptt || (ptt_held && !due(now,ptt_until)));\n    taskEXIT_CRITICAL();\n    return down;\n}\n#endif\n\nstatic void input_task(void *arg)'),
         ('\t\traw_keys = keys;', '\t\traw_keys = keys;\n#if CONFIG_DEV_TX\n\t\tconst keymap_entry_t *ptt = keys && !ptt_blocked ? key_for(ACT_PTT, false) : NULL;\n\t\tbool physical_down = ptt && (keys & (1u << ptt->bit));\n\t\tif (physical_down != physical_ptt) {\n\t\t\tphysical_ptt = physical_down;\n\t\t\tradio_req_physical_ptt(physical_down);\n\t\t}\n#endif'),
     ])
-    transform("core/input/input.h", [("uint32_t input_raw_keys(void);", "uint32_t input_raw_keys(void);\n#if CONFIG_DEV_TX\nbool input_physical_ptt(void);\n#endif")])
+    transform("core/input/input.h", [("uint32_t input_raw_keys(void);", "uint32_t input_raw_keys(void);\n#if CONFIG_DEV_TX\nbool input_physical_ptt(void);\nbool input_ptt_down(void);\n#endif")])
     transform("core/radio/radio.h", [("void radio_req_ptt(bool down);", "void radio_req_ptt(bool down);\n#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down);\n#endif")])
     transform("core/radio/radio_task.c", [
         ('#include "config.h"', '#include "config.h"\n#if CONFIG_P25_NATIVE\n#include "native_modem/native_lab.h"\n#endif'),
-        ("for (;;) {\n\t\tTickType_t due", "for (;;) {\n#if CONFIG_P25_NATIVE\n\t\tnative_lab_service(&sm,hal_micros());\n#endif\n\t\tTickType_t due"),
-        ("radio_req_t req;\n\t\tif (xQueueReceive", "radio_req_t req;\n#if CONFIG_P25_NATIVE\n\t\tint32_t native_wait=(int32_t)native_lab_wait_ms();\n\t\tif (native_wait && left>native_wait) left=native_wait;\n#endif\n\t\tif (xQueueReceive"),
-        ("req_handled++;", "req_handled++;\n#if CONFIG_P25_NATIVE\n\t\t\t\tif (native_lab_request(&sm,&req)) continue;\n#endif"),
-        ("TickType_t now = xTaskGetTickCount();", "TickType_t now = xTaskGetTickCount();\n#if CONFIG_P25_NATIVE\n\t\tif (native_lab_owns()) { next_tick=now+tick_period; next_poll=now+period; publish(); continue; }\n#endif"),
-        ("radio_sm_init(&sm, hal_millis());", "radio_sm_init(&sm, hal_millis());\n#if CONFIG_P25_NATIVE\n\tnative_lab_init();\n#endif"),
-        ("void radio_req_ptt(bool down)", "#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down)\n{ post(RREQ_PTT, down ? NATIVE_PHYSICAL_PTT_DOWN : NATIVE_PHYSICAL_PTT_UP, pdMS_TO_TICKS(50)); }\n#endif\nvoid radio_req_ptt(bool down)"),
+        ('for (;;) {\n\t\tTickType_t due', 'radio_req_t req;\n    bool retained_request=false;\n\tfor (;;) {\n#if CONFIG_P25_NATIVE\n\t\tnative_lab_service(&sm,hal_micros());\n#endif\n\t\tTickType_t due'),
+        ('radio_req_t req;\n\t\tif (xQueueReceive(requests, &req, left > 0 ? (TickType_t)left : 0) == pdTRUE) {', '#if CONFIG_P25_NATIVE\n\t\tint32_t native_wait=(int32_t)native_lab_wait_ms();\n\t\tif (native_wait && left>native_wait) left=native_wait;\n#endif\n        if (retained_request || xQueueReceive(requests,&req,left>0?(TickType_t)left:0)==pdTRUE) {\n            retained_request=false;'),
+        ('req_handled++;', 'req_handled++;\n#if CONFIG_P25_NATIVE\n                int handled=native_lab_request(&sm,&req);\n                if(handled==NATIVE_REQUEST_WAIT){retained_request=true;vTaskDelay(1);break;}\n                if(handled)continue;\n#endif'),
+        ('TickType_t now = xTaskGetTickCount();', 'TickType_t now = xTaskGetTickCount();\n#if CONFIG_P25_NATIVE\n\t\tif (native_lab_owns()) {\n            next_tick=now+tick_period;\n#if CONFIG_P25_CHANNELS\n            if((int32_t)(now-next_poll)>=0){\n                radio_sm_native_maintenance(&sm,hal_millis());\n                next_poll=now+period;\n            }\n#else\n            next_poll=now+period;\n#endif\n            publish();continue;\n        }\n#endif'),
+        ('radio_sm_init(&sm, hal_millis());', 'radio_sm_init(&sm, hal_millis());\n#if CONFIG_P25_NATIVE\n\tnative_lab_init();\n#endif'),
+        ('void radio_req_ptt(bool down)', '#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down)\n{ post(RREQ_PTT, down ? NATIVE_PHYSICAL_PTT_DOWN : NATIVE_PHYSICAL_PTT_UP, pdMS_TO_TICKS(50)); }\n#endif\nvoid radio_req_ptt(bool down)'),
     ])
     # Upstream intentionally bounds the CPS version to 15 bytes in a zeroed
     # buffer. memcpy makes that deliberate truncation explicit for long tags.
@@ -171,6 +184,7 @@ def prepare():
     # Keep the AMBE code/table windows and full-resolution framebuffer intact.
     transform("boards/dm32/freertos_board.h", [("#define configTOTAL_HEAP_SIZE\t(32 * 1024 + 512)",
         "#if CONFIG_P25 && (CONFIG_P25_BENCH || CONFIG_DEV_TX)\n#define configTOTAL_HEAP_SIZE (40 * 1024 + 512)\n#elif CONFIG_P25\n#define configTOTAL_HEAP_SIZE (36 * 1024 + 512)\n#else\n#define configTOTAL_HEAP_SIZE (32 * 1024 + 512)\n#endif")])
+    classic_channels.prepare(transform)
     for p in sorted((ROOT / "src/p25").glob("*")):
         if p.suffix in (".c", ".h", ".inc"):
             write_owned(DEST / "core/p25" / p.name, p.read_bytes())
@@ -190,9 +204,9 @@ def prepare():
     write_owned(DEST / "P25-DERIVATIVE.txt", (
         "User-authorized GPL-compatible P25 development derivative.\n"
         "Original RadioFoundry files remain MIT with their notices. Added P25/IMBE\n"
-        "files retain GPL-3.0-or-later; combined laboratory distribution is GPLv3+.\n"
+        "files retain GPL-3.0-or-later; combined distribution is GPLv3+.\n"
         "Not an upstream MIT-only contribution. See COPYING-P25 and source manifest.\n"
-        "Hardware-unverified. Bounded native-PHY tests; no operational P25 voice mode.\n"
+        "Classic supports saved conventional P25 channels; final RF qualification is incomplete.\n"
     ).encode())
     OWNED_FILE.write_text(json.dumps(OWNED, indent=2) + "\n")
     changed=subprocess.check_output(["git","-C",str(DEST),"diff","--name-only","-z","HEAD"]).decode().split("\0")
@@ -219,7 +233,12 @@ def main():
     ap.add_argument("--dev-update", action="store_true", help="approved RAM-helper cable entry; TX/write inhibits remain")
     ap.add_argument("--reuse-codec", action="store_true", help="reuse codec only when inputs/compiler/archive/call graphs match checked hashes")
     ap.add_argument("--tx-bench",action="store_true",help="bounded native TX on 145.500 MHz; retains ordinary PTT/storage guards")
+    ap.add_argument('--classic', action='store_true', help='Classic FM/DMR/conventional P25 release preset')
     args = ap.parse_args()
+    if args.classic:
+        if args.first_boot or args.disable or args.disable_native or args.dev_update or args.tx_bench:
+            ap.error('Classic is a separate normal-operation preset')
+        args.speed_codec=args.lean=True
     if args.tx_bench and not (args.first_boot and args.dev_update):ap.error("tx-bench requires first-boot and dev-update")
     if args.dev_update and not args.first_boot:ap.error("dev-update needs first-boot restrictions")
     if args.disable and (args.lean or args.cpu_profile):
@@ -247,19 +266,30 @@ def main():
     suffix = "firstboot" if args.first_boot else "off" if args.disable else "native" if native else "lab"
     identity=suffix
     suffix += ("-lean" if args.lean else "") + ("-cpu" if args.cpu_profile else "") + ("-dev" if args.dev_update else "") + ("-tx" if args.tx_bench else "")
+    if args.classic:
+        suffix='classic'
+        identity='classic-0.1.0-rc1'
     b = f"build/dm32-p25-{suffix}"
     command = ["make", "-j8", "BOARD=dm32", f"CROSS={ROOT}/toolchain/bin/csky-elf-", f"BUILD={b}",
         "CONFIG_P25=" + ("n" if args.disable else "y"), "CONFIG_P25_NATIVE="+("y" if native else "n"), "CONFIG_DMR_IP_GATEWAY=n", "CONFIG_NET_PPP=n",
         "CONFIG_APRS=n", "CONFIG_SFR=n", "CONFIG_HOTSPOT=n", "CONFIG_ZONE_SHARE=n",
-        f"RFOUNDRY_VERSION=dfbaf20c-p25-{identity}", f"RFOUNDRY_GIT_TIME={git(UP, 'show', '-s', '--format=%ct', 'HEAD')}",
+        'RFOUNDRY_VERSION='+('open25-'+identity if args.classic else 'dfbaf20c-p25-'+identity), f"RFOUNDRY_GIT_TIME={git(UP, 'show', '-s', '--format=%ct', 'HEAD')}",
         "RFOUNDRY_GIT_DIRTY=1",
         "CONFIG_FIRSTBOOT="+("y" if args.first_boot else "n"),
         "CONFIG_P25_BENCH="+("n" if args.lean else "y"),
         "CONFIG_CPU_PROFILE="+("y" if args.cpu_profile else "n"),
         "CONFIG_DEV_UPDATE="+("y" if args.dev_update else "n"),
-        "CONFIG_DEV_TX="+("y" if args.tx_bench else "n"),
+        "CONFIG_DEV_TX="+("y" if args.tx_bench or args.classic else "n"),
+        "CONFIG_P25_CHANNELS="+("y" if args.classic else "n"),
         f"OPT=-Os -ffile-prefix-map={DEST}=/radiofoundry -fdebug-prefix-map={DEST}=/radiofoundry "
         f"-DRFOUNDRY_SOURCE_EPOCH={git(UP, 'show', '-s', '--format=%ct', 'HEAD')}"]
+    if args.classic:
+        command += ['CONFIG_FM=y','CONFIG_DMR=y','CONFIG_CHANNEL_EDIT=y','CONFIG_CPS_OPENFW=y',
+                    'CONFIG_CPS_FAST=y','CONFIG_STUB_ENTRY=y','CONFIG_DEBUGLINK=y',
+                    *['CONFIG_'+name+'=n' for name in ('DMR_GPS','DMR_SMS','DMR_TMS','DMR_ARS',
+                      'DMR_LRRP','DMR_SIGNALING','DMR_EMERGENCY','DMR_ROAMING','DMR_UDP_COMPRESS',
+                      'DMR_CONFIRMED','CRASH_REPORT','BCAST_FM','AM_RX','DUAL_WATCH','VOX','GPS',
+                      'LANG_ES','LANG_IT')]]
     if args.first_boot:
         command += ["CONFIG_STUB_ENTRY="+("y" if args.dev_update else "n"), "CONFIG_CPS_OPENFW=n", "CONFIG_CPS_FAST=n", "CONFIG_AUDIO_PROBE=n"]
     log = ROOT / f"logs/radiofoundry-p25-{suffix}.log"
@@ -341,9 +371,9 @@ def main():
              "--dir", ROOT / "research/originals", "-o", prefix.with_suffix(".codec.bin")], cwd=DEST)
         if not prefix.with_suffix(".codec.bin").exists():
             raise SystemExit("No recognized local stock codec; not claiming preserved DMR voice")
-    inputs = [ROOT / "tools/build_radiofoundry.py", ROOT / "tools/codec_cache.py"] + [p for folder in (ROOT / "src/p25", ROOT / "src/modem", ROOT / "src/codec", ROOT / "integration/radiofoundry")
+    inputs = [ROOT / "tools/build_radiofoundry.py", ROOT / "tools/codec_cache.py", ROOT / "tools/classic_channels.py"] + [p for folder in (ROOT / "src/p25", ROOT / "src/modem", ROOT / "src/codec", ROOT / "integration/radiofoundry")
               for p in folder.rglob("*") if p.is_file()]
-    manifest = {"kind": "hardware-unverified RadioFoundry laboratory image; bounded native PHY tests, no operational P25 voice mode",
+    manifest = {"kind": "Open25-DM32 Classic release candidate; hardware qualification required" if args.classic else "RadioFoundry P25 laboratory image",
         "upstream_commit": PIN, "freertos_commit": git(DEST / "third_party/FreeRTOS-Kernel", "rev-parse", "HEAD"),
         "command": [str(x) for x in command], "p25_enabled": not args.disable, "native_interface_enabled":native,
         "firstboot_restrictions_enabled": args.first_boot,
@@ -351,7 +381,7 @@ def main():
         "audits": {"unresolved_symbols": [], "high_register_instructions": 0, "compiler_warnings": 0,**firstboot_audits},
         "forced_rebuild_identical": args.verify_rebuild,
         "codec_speed_build":args.speed_codec, "bench_enabled":not args.lean, "cpu_profile_enabled":args.cpu_profile, "dev_update_enabled":args.dev_update,
-        "native_tx_bench_enabled":args.tx_bench,
+        "native_tx_bench_enabled":args.tx_bench, "classic_enabled":args.classic,
         "firstboot_flags":47 if args.tx_bench else 15 if args.dev_update else 31,
         "codec_slot": "recognized local stock merged separately" if args.with_local_stock else "reserved; no stock AMBE merged",
         "sources": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(inputs)},

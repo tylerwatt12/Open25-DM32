@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* HR_C7000 guide 9.4-9.6, printed 294-297, Tables 46-49/Figures 70-71;
  * RadioFoundry dfbaf20c hrc7000_bs.c raw-TX sequencing. Hardware-unverified.
- * RF_MODE, RF_MOD_BIAS, DEV_LIMITER and RX FIR are deliberately never written:
- * board routing/calibration is retained, not replaced by the guide's IF example.
+ * RF_MODE's continuous-RX bit is changed only while P25 owns the modem, then
+ * restored. RF_MOD_BIAS, DEV_LIMITER and RX FIR retain board calibration.
  * Both TX halves get identical bytes, matching upstream's tested default; this
  * does not assert measured alternate-buffer ownership or P25 pulse shaping. */
 #include "hrc_native_chip.h"
@@ -55,16 +55,20 @@ static int start(void *ctx, nt_test *t)
 #endif
     if (!d->hooks->prepare(d->hooks->ctx,&t->config)) return 0;
     for (unsigned i=0;i<HN_REGS;i++) d->saved[i]=hrc7000_rd(d->modem,regs[i]);
+    d->saved_rf_mode=hrc7000_rd(d->modem,C7_RF_MODE);
     d->saved_valid=1;
     w(d,C7_LAYER2_TXRX_CTRL,0); w(d,C7_LAYER2_SLOTON,0);
+    if(t->config.mode==NT_TRANSMIT && t->config.audio) w(d,C7_LAYER2_CONTROL,0);
     w(d,C7_WORK_MODE,C7_WORK_MODE_FM); w(d,C7_WORK_MODE,0x02);
     if (t->config.mode==NT_RECEIVE && t->config.p25_sync) {
+        /* P25 owns one continuous receive stream; restore the DMR path on exit. */
+        w(d,C7_RF_MODE,d->saved_rf_mode&~(1u<<11));
         /* Sync comparators contain 24 bits per register, with enable in H31.
          * Splitting 16/32 silently loses L31:24 on the actual chip. */
         const uint64_t sync=UINT64_C(0x5575f5ff77ff);
         uint32_t hi=0x80000000u|(uint32_t)(sync>>24),lo=(uint32_t)(sync&0xffffffu);
         w(d,C7_RECV_MS_SYNC_H,hi); w(d,C7_RECV_MS_SYNC_L,lo);
-        w(d,C7_RECV_BS_SYNC_H,hi); w(d,C7_RECV_BS_SYNC_L,lo);
+        w(d,C7_RECV_BS_SYNC_H,hi&~0x80000000u); w(d,C7_RECV_BS_SYNC_L,lo);
         for (unsigned i=9;i<HN_REGS;i+=2) w(d,regs[i],d->saved[i]&~0x80000000u);
     }
     w(d,C7_SYS_INTERP_CLEAR,OWNED_SYS); w(d,C7_INTERP_CLEAR,0x0fu);
@@ -74,14 +78,22 @@ static int start(void *ctx, nt_test *t)
     if (t->config.mode==NT_TRANSMIT && t->config.audio)
         hrc7000_audio_bits(d->modem,C7_AUDIO_PCM_MIC,0);
 #endif
+    if(t->config.p25_sync) {
+        /* Release prior RX synchronization with both directions disabled. */
+        w(d,C7_LAYER2_TXRX_CTRL,1u<<23);
+        w(d,C7_LAYER2_TXRX_CTRL,0);
+    }
     if (!d->hooks->irq_on(d->hooks->ctx,t)) return 0;
-    if (t->config.mode==NT_RECEIVE) w(d,C7_LAYER2_TXRX_CTRL,0x41);
+    if (t->config.mode==NT_RECEIVE) {
+        w(d,C7_SYS_INTERP_CLEAR,OWNED_SYS);
+        w(d,C7_LAYER2_TXRX_CTRL,0x41);
+    }
     d->last_sys=d->last_type=d->last_sys_us=0;event(d,1,t->started_us);
     return 1;
 }
-static void copy_block(hn_chip *d, const uint8_t raw[36])
+static void copy_block(hn_chip *d, const uint8_t raw[36],unsigned first,unsigned end)
 {
-    for (unsigned i=0;i<36;i++) { d->modem->buf[i]=raw[i]; d->modem->buf[36+i]=raw[i]; }
+    for (unsigned i=first;i<end;i++) { d->modem->buf[i]=raw[i]; d->modem->buf[36+i]=raw[i]; }
 }
 #if CONFIG_DEV_TX
 static void stage_live(hn_chip *d, uint32_t now)
@@ -95,7 +107,8 @@ static void stage_live(hn_chip *d, uint32_t now)
     if (age<23000u || age>28500u) return;
     const nt_block *b=&t->tx[t->tx_tail];
     if (b->index!=t->stats.tx_sent) return;
-    copy_block(d,b->raw);
+    /* The next head is needed early; the previous tail is still on air. */
+    copy_block(d,b->raw,0,4);
     d->staged_index=b->index;
     nt_trace_stage(t,now);
 }
@@ -108,9 +121,10 @@ static int write_block(void *ctx, const uint8_t raw[36])
         /* This slot has already begun fetching its head. If the early
          * handoff was missed, stop rather than transmit a mixed block. */
         if (d->staged_index!=d->test->stats.tx_sent) return 0;
+        copy_block(d,raw,4,36);
     } else
 #endif
-        copy_block(d,raw);
+        copy_block(d,raw,0,36);
     w(d,C7_LAYER2_TXRX_CTRL,0x80); return 1; /* one send, no autotest/repeat */
 }
 static void cancel(void *ctx) { w(ctx,C7_LAYER2_TXRX_CTRL,0); }
@@ -125,6 +139,7 @@ static int restore(void *ctx)
         w(d,C7_WORK_MODE,C7_WORK_MODE_FM);
         for (unsigned i=1;i<HN_REGS;i++)
             w(d,regs[i],i==3 ? d->saved[i]&~0x80u : d->saved[i]);
+        w(d,C7_RF_MODE,d->saved_rf_mode);
         w(d,C7_WORK_MODE,d->saved[0]);
         w(d,C7_SYS_INTERP_CLEAR,OWNED_SYS); w(d,C7_INTERP_CLEAR,0x0fu);
     }

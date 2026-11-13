@@ -30,7 +30,7 @@ static uint8_t sample_checks=1;
 #define sample_checks 0
 #endif
 static TaskHandle_t worker;
-static uint8_t state; /* 0 idle, 1 pending/running, 2 passed/finished, 3 failed, 4 no worker */
+static volatile uint8_t state; /* 0 idle, 1 pending/running, 2 passed/finished, 3 failed, 4 no worker */
 static uint8_t request_mode, play_requested, delay_seconds;
 static volatile uint8_t stop_requested;
 static uint32_t stack_free;
@@ -47,6 +47,22 @@ static uint8_t pcm_paced=1;
 static p25_phy_rx phy;
 #if CONFIG_DEV_TX
 static uint32_t live_sid;
+#if CONFIG_P25_CHANNELS
+static p25_call channel_call;
+static uint32_t channel_voice_ms;
+static bool channel_voice_seen;
+int p25_lab_set_channel(uint16_t receive_nac,uint16_t talkgroup,uint32_t radio_id)
+{
+    taskENTER_CRITICAL();
+    int ok=state!=1;
+    if(ok)channel_call=(p25_call){.nac=receive_nac,.talkgroup=talkgroup,.source_id=radio_id};
+    taskEXIT_CRITICAL();
+    return ok;
+}
+void p25_lab_channel_stop(void) { stop_requested=1; }
+int p25_lab_channel_receiving(void)
+{ return state==1 && request_mode==5 && channel_voice_seen && (uint32_t)(hal_millis()-channel_voice_ms)<650u; }
+#endif
 static volatile uint8_t live_released,live_capturing;
 static uint32_t live_mic_frames,live_peak,live_encode_max,live_encode_us,live_slow;
 static uint32_t live_first_us,live_last_us,live_encoded;
@@ -75,7 +91,14 @@ int p25_lab_channel_rx(uint32_t hz)
     taskENTER_CRITICAL();
     int ok=worker && state!=1;
     if (ok) {
-        frequency=hz;nac=0x293;group=1;duration_ms=0;
+        frequency=hz;
+#if CONFIG_P25_CHANNELS
+        nac=channel_call.nac==0xF7Eu?P25_NAC_ANY:channel_call.nac;
+        group=channel_call.talkgroup;channel_voice_seen=false;
+#else
+        nac=0x293;group=1;
+#endif
+        duration_ms=0;
         request_mode=5;play_requested=1;delay_seconds=0;stop_requested=0;
         state=1;
     }
@@ -109,7 +132,11 @@ static unsigned queued_symbols(void)
 
 static int live_run(void)
 {
+#if CONFIG_P25_CHANNELS
+    const p25_call call=channel_call;
+#else
     const p25_call call={0x293,1,1,0,0,0};
+#endif
     int16_t pcm[160];
     uint8_t raw[36],queued=0;
     unsigned lead=3;
@@ -130,7 +157,7 @@ static int live_run(void)
     while (ok && !stop_requested) {
         if (!native_lab_live_poll(sid,&native_state,&native_reason,&queued) || native_state==NT_FAULT) { ok=false;break; }
         if (native_state==NT_STOPPED) { ok=sealed && native_reason==NT_TX_COMPLETE;break; }
-        bool closing=live_released || !input_physical_ptt();
+        bool closing=live_released || !input_ptt_down();
         if (closing && live_capturing) {
             live_capturing=0;
             board.audio->stop();
@@ -260,11 +287,17 @@ static void consume(uint32_t seq,uint8_t kind,const uint8_t raw[36])
     uint32_t at=hal_micros();
     uint32_t prior_gaps=phy.gaps;
     uint32_t prior_frames=voice.rx_frames;
+#if CONFIG_P25_CHANNELS
+    uint32_t prior_voice=voice.rx_voice;
+#endif
     if(p25_phy_rx_record(&phy,&voice,seq,kind,raw)) {
         gaps+=phy.gaps-prior_gaps;unsupported=phy.unsupported;
         if(unsupported)stop_requested=1;
         taskENTER_CRITICAL();fifo.head=fifo.tail=fifo.count=fifo.playing=0;taskEXIT_CRITICAL();
     }
+#if CONFIG_P25_CHANNELS
+    if(voice.rx_voice!=prior_voice) { channel_voice_ms=hal_millis();channel_voice_seen=true; }
+#endif
     if(voice.rx_frames!=prior_frames) {
         taskENTER_CRITICAL();
         fifo.draining=voice.framer.nid.duid==P25_DUID_TDU || voice.framer.nid.duid==P25_DUID_TDULC;
@@ -432,6 +465,12 @@ size_t p25_lab_command(const uint8_t *req,uint16_t len,uint8_t *out,size_t cap)
     if(!cap)return 0;
     out[0]=DL_ST_BAD_ARG;
     if(!req || !len)return 1;
+#if CONFIG_P25_CHANNELS
+    /* Saved channels and normal PTT own operation; diagnostics are read-only. */
+    if(req[0]!=0 && req[0]!=7 && req[0]!=10 && req[0]!=11 && req[0]!=13) {
+        out[0]=DL_ST_UNAVAILABLE;return 1;
+    }
+#endif
 #if CONFIG_DEV_TX
     if (req[0]==13 && len==1) {
         out[0]=DL_ST_OK;

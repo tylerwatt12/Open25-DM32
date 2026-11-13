@@ -1,3 +1,0 @@
-*.csv text eol=lf
-# This evidence diff deliberately preserves original upstream whitespace.
-experiments/codec/results/portability.patch -whitespace

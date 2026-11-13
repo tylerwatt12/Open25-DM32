@@ -22,6 +22,7 @@ typedef struct {
     const hn_hooks *hooks;
     nt_test *test;
     uint32_t saved[HN_REGS];
+    uint32_t saved_rf_mode;
     uint32_t last_event,last_us,last_sys,last_type,last_sys_us;
     uint32_t event_regs[HN_DIAG_REGS];
 #if CONFIG_DEV_TX

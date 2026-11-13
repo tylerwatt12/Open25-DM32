@@ -22,7 +22,7 @@ new interface with FM and conventional/trunked P25.
 | Conventional P25 · Original RadioFoundry interface | Trunked P25 · New interface |
 | ![Classic P25 channel settings with talkgroup and NAC](images/classic-settings.png) | ![Next P25 system settings with WACN and System ID](images/next-settings.png) |
 | P25 channel settings: talkgroup, NAC, and radio ID | Trunked system settings: WACN and System ID |
-| Planned first release | **Source will be provided on release.** |
+| **0.1.0-rc1-r4 release candidate available** | **Source will be provided on release.** |
 
 | Feature | Classic | Next |
 | --- | --- | --- |
@@ -47,12 +47,33 @@ Encryption support is still being tested with other radios and systems.
 
 **P25 Phase 2, LSM, and 700/800 MHz reception are not supported.**
 
-## Release plans
+## Release status
 
 **Classic and Next are alpha firmware, and testing is still underway.**
-Classic is planned for release first, followed by Next. Each release will
-include firmware downloads, compatible-radio information, installation
-instructions, and source code.
+Classic **0.1.0-rc1-r4** is available in the
+[Firmware Utility](https://kd8zmm.com/open25-dm32/firmware.html), under
+**Open25-DM32 Classic → Standard · DM-32UV**. Final on-air qualification is
+incomplete; compatibility with every DM-32UV hardware revision is not established.
+Next remains unavailable, with its release date to be determined.
+
+This repository contains **Classic source only**. Next source remains unreleased.
+Firmware ZIPs are hosted on kd8zmm.com; GitHub contains no firmware downloads.
+See [BUILD.md](BUILD.md) to build Classic and its application-only installer ZIP,
+and [THIRD_PARTY.md](THIRD_PARTY.md) for dependency notices.
+
+### Installing Classic
+
+1. Open the Firmware Utility in desktop Chrome or Edge and select Classic.
+2. Connect the radio and select the release candidate.
+3. Save and keep a verified full-radio backup before installing.
+4. Install the selected package and check that the radio starts normally.
+
+The package contains no proprietary DMR codec. It requires a valid compatible
+codec already in the reserved location on the radio. The installer checks that
+location before writing and stops if the codec is missing, damaged or elsewhere.
+It preserves the codec area, bootloader and data flash; it does not extract or
+relocate codecs from other firmware layouts. Full-backup restoration can replace
+both complete flash images. Keep backups private and use only this radio's backup.
 
 ## Programming and firmware tools
 

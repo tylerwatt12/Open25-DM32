@@ -15,6 +15,42 @@ static uint32_t pending_start, battery_at;
 static uint32_t voice_owner;
 #if CONFIG_DEV_TX
 static bool live_enabled, live_rx_pending, live_tx_pending, live_restore_pending;
+#if CONFIG_P25_CHANNELS
+static int live_owner(void);
+static bool channel_selected, channel_handoff;
+static uint8_t channel_denial;
+static uint32_t channel_tx_ms;
+static void channel_view(radio_sm_t *sm)
+{
+    radio_state_t state=channel_denial && sm->ptt ? RS_TX_DENIED :
+        live_owner() && (test.state==NT_ARMED || test.state==NT_TX || test.state==NT_DRAIN) ? RS_TX :
+        p25_lab_channel_receiving() ? RS_RX : RS_IDLE;
+    if(sm->view.state!=state || sm->view.tx_deny!=channel_denial){
+        sm->view.state=state;sm->view.tx_deny=channel_denial;sm->serial++;
+    }
+}
+static void channel_service(radio_sm_t *sm)
+{
+    if(channel_handoff)return;
+    bool selected=codeplug_mode_p25(sm->view.ch.mode) && !sm->view.vfo &&
+                  !sm->power_off_req && !sm->view.power_off;
+    if(selected && !channel_selected && !voice_owner && !test.owned && !p25_lab_busy()) {
+        const channel_t *ch=&sm->view.ch;
+        if(!codeplug_p25_valid(ch) || !board_in_band(ch->rx_hz,false))return;
+        if(!p25_lab_set_channel(ch->p25_nac,ch->p25_tg,ch->p25_id))return;
+        channel_selected=live_enabled=live_rx_pending=true;
+        live_tx_pending=false;channel_denial=0;
+    }
+    if(channel_selected){
+        if(live_owner() && test.owned && sm->view.tot_s &&
+           (uint32_t)(hal_millis()-channel_tx_ms)>=sm->view.tot_s*1000u) {
+            channel_denial=TXDENY_TIMEOUT;
+            p25_lab_channel_stop();nt_stop(&test,test.session,NT_DEADLINE);
+        }
+        channel_view(sm);
+    }
+}
+#endif
 static uint32_t live_summary[5]; /* count, stop reason, blocks sent, PA keys, faults */
 static int live_owner(void) { return voice_owner && test.config.mode==NT_TRANSMIT; }
 #endif
@@ -32,6 +68,9 @@ void native_lab_init(void) {
     pending_start=battery_at=voice_owner=0;
 #if CONFIG_DEV_TX
     live_enabled=live_rx_pending=live_tx_pending=live_restore_pending=false;
+#if CONFIG_P25_CHANNELS
+    channel_selected=channel_handoff=false;channel_denial=0;channel_tx_ms=0;
+#endif
     for (unsigned i=0;i<5;i++) live_summary[i]=0;
 #endif
     last_req_type=last_req_arg=last_req_ms=ptt_consumed=cancellations=cancel_type=cancel_arg=0;
@@ -66,6 +105,9 @@ int native_lab_owns(void) {
     int r=updater() || test.owned;
 #if CONFIG_DEV_TX
     r=r || live_enabled || (live_owner() && test.state==NT_ARMED);
+#if CONFIG_P25_CHANNELS
+    r=r || channel_handoff;
+#endif
 #endif
     taskEXIT_CRITICAL();
     return r;
@@ -81,6 +123,14 @@ static int battery_ok(void)
 static int eligible(const radio_sm_t *sm)
 {
     const radio_view_t *v=&sm->view;
+#if CONFIG_P25_CHANNELS
+    if(channel_selected) {
+        if(!board.native_modem || updater() || sm->hotspot || v->power_off || !battery_ok())return 0;
+        if(test.config.mode==NT_TRANSMIT)
+            return sm->ptt && radio_sm_tx_check(sm)==TXDENY_NONE && v->ch.tx_hz==test.config.frequency_hz;
+        return v->ch.rx_hz==test.config.frequency_hz;
+    }
+#endif
     if (!board.native_modem || (p25_lab_busy() && !voice_owner) || sm->ptt || sm->hotspot ||
         (v->state!=RS_IDLE && !(voice_owner && v->state==RS_RX)) ||
         v->ch.mode!=RADIO_MODE_FM || v->am || v->bcast || v->power_off || beep_busy()) return 0;
@@ -108,13 +158,19 @@ static void live_next(radio_sm_t *sm)
     if (!tx) live_rx_pending=false;
     if ((tx || rx) && test.state==NT_FAULT) nt_reset(&test);
     uint32_t sid=0;
-    if (tx && nt_arm_live(&test,sm->view.ch.tx_hz)) voice_owner=sid=test.session;
+    if (tx && nt_arm_live(&test,sm->view.ch.tx_hz)) {
+        test.config.power=sm->view.power;voice_owner=sid=test.session;
+    }
     taskEXIT_CRITICAL();
     if (sid && (!eligible(sm) || !p25_lab_live_begin(sid))) {
         deny(sid);
         native_lab_voice_release(sid);
     }
-    if (!tx && rx && sm->view.ch.rx_hz==145500000u) p25_lab_channel_rx(sm->view.ch.rx_hz);
+    if (!tx && rx &&
+#if !CONFIG_P25_CHANNELS
+        sm->view.ch.rx_hz==145500000u &&
+#endif
+        !p25_lab_channel_rx(sm->view.ch.rx_hz)) live_rx_pending=true;
 }
 #endif
 static void restore_channel(radio_sm_t *sm)
@@ -126,6 +182,9 @@ static void restore_channel(radio_sm_t *sm)
 void native_lab_service(radio_sm_t *sm, uint32_t now)
 {
     if(updater())return;
+#if CONFIG_P25_CHANNELS
+    channel_service(sm);
+#endif
     now=hal_micros();
     taskENTER_CRITICAL();
     uint32_t sid=pending_start; pending_start=0;
@@ -133,6 +192,11 @@ void native_lab_service(radio_sm_t *sm, uint32_t now)
     if (sid && test.state==NT_ARMED && sid==test.session) {
         if (eligible(sm)) {
             if (!nt_begin(&test,sid,now)) deny(sid);
+#if CONFIG_P25_CHANNELS
+            else if(channel_selected && test.config.mode==NT_TRANSMIT) {
+                channel_tx_ms=sm->tx_start_ms=hal_millis();sm->tot_warned=false;
+            }
+#endif
             battery_at=now;
         }
         else deny(sid);
@@ -149,6 +213,9 @@ void native_lab_service(radio_sm_t *sm, uint32_t now)
         if (nt_cleanup(&test)) {
 #if CONFIG_DEV_TX
             if (live_enabled) return; /* keep the analog speaker muted between directions */
+#if CONFIG_P25_CHANNELS
+            if(channel_handoff)return;
+#endif
             live_restore_pending=false;
 #endif
             /* Board is back in FM; force a full retune and fresh speaker/LED decisions. */
@@ -161,6 +228,9 @@ void native_lab_service(radio_sm_t *sm, uint32_t now)
         restore_channel(sm);
     }
     live_next(sm);
+#if CONFIG_P25_CHANNELS
+    if(channel_selected)channel_view(sm);
+#endif
 #endif
 }
 int native_lab_request(radio_sm_t *sm, const radio_req_t *r)
@@ -171,6 +241,40 @@ int native_lab_request(radio_sm_t *sm, const radio_req_t *r)
 #endif
         return 1;
     }
+#if CONFIG_P25_CHANNELS
+    if(r->type==RREQ_PTT && (r->arg==NATIVE_PHYSICAL_PTT_DOWN || r->arg==NATIVE_PHYSICAL_PTT_UP))return 1;
+    if(r->type==RREQ_PTT && (codeplug_mode_p25(sm->view.ch.mode) || channel_selected || live_owner())) {
+        if(!channel_selected && codeplug_mode_p25(sm->view.ch.mode)) channel_service(sm);
+        if(!r->arg) {
+            sm->ptt=false;live_tx_pending=false;channel_denial=0;
+            p25_lab_live_up();
+            if(live_owner() && test.state==NT_ARMED)nt_stop(&test,test.session,NT_USER_STOP);
+        } else if(!sm->ptt) {
+            channel_denial=radio_sm_tx_check(sm);
+            sm->ptt=true;
+            if(!channel_denial) {
+                live_tx_pending=live_rx_pending=true;
+                p25_lab_channel_stop();
+                if(voice_owner){pending_start=0;nt_stop(&test,test.session,NT_USER_STOP);}
+            }
+        }
+        channel_view(sm);return 1;
+    }
+    if(channel_selected || channel_handoff) {
+        if(r->type==RREQ_POWER_OFF) {
+            sm->ptt=false;channel_denial=0;p25_lab_live_up();
+        } else if(sm->ptt || live_owner())return 1;
+        if(voice_owner || test.owned || p25_lab_busy()) {
+            channel_handoff=true;live_enabled=live_rx_pending=live_tx_pending=false;
+            p25_lab_channel_stop();
+            if(voice_owner){pending_start=0;nt_stop(&test,test.session,NT_INTERRUPTED);}
+            return NATIVE_REQUEST_WAIT;
+        }
+        channel_selected=channel_handoff=false;
+        live_enabled=live_restore_pending=false;
+        return 0;
+    }
+#endif
 #if CONFIG_DEV_TX
     if (live_enabled && r->type==RREQ_PTT) {
         taskENTER_CRITICAL();
@@ -250,11 +354,15 @@ int native_lab_voice_release(uint32_t sid)
             live_summary[2]=test.stats.tx_sent;
             live_summary[3]=test.stats.pa_keys;
             live_summary[4]=test.stats.faults;
+            if(live_enabled)live_rx_pending=true;
         }
 #endif
         nt_record discard;
         while (nt_pop(&test,sid,&discard)) {}
         voice_owner=0;released=1;
+#if CONFIG_P25_CHANNELS
+        if(live_enabled && !channel_handoff) live_rx_pending=true;
+#endif
     }
     taskEXIT_CRITICAL();return released;
 }
@@ -319,6 +427,9 @@ size_t native_lab_command(const uint8_t *p, uint16_t n, uint8_t *out, size_t cap
         for(unsigned i=0;i<8;i++)put(out+1+4*i,words[i]);
         taskEXIT_CRITICAL();out[0]=DL_ST_OK;return 33;
     }
+#if CONFIG_P25_CHANNELS
+    if(p[0]!=11){out[0]=DL_ST_UNAVAILABLE;return 1;}
+#endif
     if (!board.native_modem) { out[0]=DL_ST_UNAVAILABLE; return 1; }
     if (p[0]==8 && n==1) {
         if (!board.native_modem->snapshot) { out[0]=DL_ST_UNAVAILABLE; return 1; }

@@ -41,7 +41,7 @@ int main(void)
     mock_tmr[3]=1;assert(!hn_port_on(&chip,&test));mock_tmr[3]=0;
     mock_tmr[6]=1;assert(!hn_port_on(&chip,&test));mock_tmr[6]=0;
     assert(mock_pic[0]==masks[0] && mock_pic[1]==masks[1] && hrc_irq_table[29]==prior);
-    nt_config c={145500000,3,2000,250,NT_TRANSMIT,1,0};uint8_t raw[36]={0};
+    nt_config c={145500000,3,2000,250,NT_TRANSMIT,1,0,0};uint8_t raw[36]={0};
     assert(nt_arm(&test,&c,1));assert(nt_load(&test,test.session,0,raw));assert(nt_load(&test,test.session,1,raw));
     assert(nt_begin(&test,test.session,0));assert(period==1000 && mock_tmr[6]==3 && !depth);
     assert(!hn_port_on(&chip,&test));
@@ -75,9 +75,11 @@ int main(void)
     assert(!memcmp(buf,raw,36)); /* same-slot event must not replace active payload */
     clock_us=359200;hrc_irq_table[IRQ_MODEM_SYS]();
     assert(test.stats.tx_sent==1 && regs[C7_LAYER2_TXRX_CTRL/4]==0);
-    assert(!memcmp(buf,next,36) && !memcmp(buf+36,next,36));
+    assert(!memcmp(buf,next,4) && !memcmp(buf+36,next,4));
+    assert(!memcmp(buf+4,raw+4,32) && !memcmp(buf+40,raw+4,32));
     clock_us=362800;hrc_irq_table[IRQ_MODEM_TS_TX]();
     assert(test.stats.tx_sent==2 && regs[C7_LAYER2_TXRX_CTRL/4]==0x80);
+    assert(!memcmp(buf,next,36) && !memcmp(buf+36,next,36));
     clock_us=392800;hrc_irq_table[IRQ_MODEM_TS_TX](); /* no PHY advance */
     assert(test.state==NT_FAULT && test.reason==NT_IO && test.stats.tx_sent==2);
     assert(regs[C7_LAYER2_TXRX_CTRL/4]==0 && nt_cleanup(&test));

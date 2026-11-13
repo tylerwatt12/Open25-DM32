@@ -33,7 +33,7 @@ typedef struct nt_config {
     uint32_t blocks;
     uint32_t duration_ms;
     uint16_t lease_ms;
-    uint8_t mode, p25_sync, audio;
+    uint8_t mode, p25_sync, audio, power;
 } nt_config;
 static inline int nt_tx_preloaded(const nt_config *c)
 {

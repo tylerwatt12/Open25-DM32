@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 enum { DM32_IMBE_SAMPLES = 160, DM32_IMBE_BYTES = 11,
-       DM32_IMBE_CONTEXT_BYTES = 6144 };
+       DM32_IMBE_CONTEXT_BYTES = 5760 };
 
 /* One static context may be shared by half-duplex RX/TX. No heap is used. All calls
  * must be serialized in a single task: upstream basic_op flags are global.

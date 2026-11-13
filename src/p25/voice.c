@@ -91,7 +91,7 @@ void p25_voice_rx_dibit(p25_voice *v, uint8_t dibit)
                 memset(pcm, 0, sizeof pcm);
                 v->rx_erasures++;
                 dm32_imbe_init(&v->codec);
-            }
+            } else v->rx_voice++;
         }
         if (v->sink) v->sink(v->sink_ctx, pcm);
     }
