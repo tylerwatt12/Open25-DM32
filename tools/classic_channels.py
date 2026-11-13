@@ -67,6 +67,8 @@ static inline bool codeplug_p25_valid(const channel_t *ch)
 \tbool ok = materialize() && flash_read(channel_addr(number), r, sizeof(r));'''),
     ])
     transform('core/ui/ui_menus.c', [
+        ('ui_toast(i == UI_CP_NEW ? TR("New codeplug started") : TR("Old codeplug kept: edit again"));',
+         'ui_toast(i == UI_CP_NEW ? TR("Creating codeplug") : TR("Old codeplug kept: edit again"));'),
         ('static void contacts_item(uint16_t i, ui_item_t *it)', 'static void __attribute__((unused)) contacts_item(uint16_t i, ui_item_t *it)'),
         ('CE_ZONES, CE_GO, CE_SHARE, CE_SAVE, CE_SAVE_NEW, CE_COUNT', '#if CONFIG_P25_CHANNELS\n       CE_P25_TG, CE_P25_NAC, CE_P25_ID,\n#endif\n       CE_ZONES, CE_GO, CE_SHARE, CE_SAVE, CE_SAVE_NEW, CE_COUNT'),
         ('[CE_SCAN] = CE_FIELD(scan_skip), [CE_ECO] = CE_FIELD(no_eco),', '[CE_SCAN] = CE_FIELD(scan_skip), [CE_ECO] = CE_FIELD(no_eco),\n#if CONFIG_P25_CHANNELS\n\t[CE_P25_TG] = CE_FIELD(p25_tg), [CE_P25_NAC] = CE_FIELD(p25_nac), [CE_P25_ID] = CE_FIELD(p25_id),\n#endif'),
@@ -88,6 +90,28 @@ static inline bool codeplug_p25_valid(const channel_t *ch)
     ])
     transform('core/ui/ui_screens.c', [
         ('return v->ch.mode == RADIO_MODE_DMR ? "DMR" : v->am ? "AM" : "FM";', 'return codeplug_mode_p25(v->ch.mode) ? "P25" : v->ch.mode == RADIO_MODE_DMR ? "DMR" : v->am ? "AM" : "FM";'),
+    ])
+    transform('core/ui/ui_svc.h', [
+        ('} ui_event_kind_t;', '\tUI_EV_CODEPLUG_STARTED,\t// Start new and its held edit finished successfully\n} ui_event_kind_t;'),
+    ])
+    transform('core/ui/ui_app.c', [
+        ('\tcase UI_EV_CODEPLUG_FOREIGN:', '\tcase UI_EV_CODEPLUG_STARTED:\n\t\tui_toast(TR("New codeplug started"));\n\t\tbreak;\n\tcase UI_EV_CODEPLUG_FOREIGN:'),
+    ])
+    transform('core/ui/ui_svc_storage.c', [
+        ('static void save_failed_text(const char *text)\n{',
+         'static bool cp_write_failed;\t// result of the held edit, owned by the storage job\n\nstatic void save_failed_text(const char *text)\n{\n\tcp_write_failed = true;'),
+        ('\tvoid (*fn)(void *ctx) = cp_jobs[job.held - 1u];', '''\tvoid (*fn)(void *ctx) = cp_jobs[job.held - 1u];
+\t// Only the explicit Start new choice may replace another firmware's settings/journal.
+\t// The settings owner attaches its live preferences through its existing claim path.
+\tif ((uintptr_t)ctx == UI_CP_NEW && storage_region() == STORAGE_REGION_FOREIGN && storage_claim_request())
+\t\tsettings_poll(hal_millis());'''),
+        ('\t\tjob.held = 0;\n\t\tfn(NULL);', '''\t\tjob.held = 0;
+\t\tcp_write_failed = false;
+\t\tfn(NULL);
+\t\tif (!cp_write_failed) {
+\t\t\tui_event_t ev = { .kind = UI_EV_CODEPLUG_STARTED };
+\t\t\tui_notify(&ev);
+\t\t}'''),
     ])
     transform('core/radio/radio_sm.h', [
         ('void radio_sm_poll(radio_sm_t *sm, uint32_t now_ms);', '''void radio_sm_poll(radio_sm_t *sm, uint32_t now_ms);

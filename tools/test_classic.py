@@ -4,6 +4,10 @@
 from pathlib import Path
 import subprocess
 import shlex
+import sys
+import os
+import tempfile
+import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 APP=ROOT/'build/radiofoundry-p25'
@@ -23,6 +27,22 @@ def main():
     run(['clang',*flags,ROOT/'tests/classic/test_channels.c',APP/'core/codeplug/codeplug.c',
          APP/'core/storage/storage.c',host/'sim/sim_flash.c','-o',OUT/'test_channels'],cwd=ROOT)
     run([OUT/'test_channels'],cwd=ROOT)
+    # Link the actual UI storage job to the actual settings/codeplug/journal owners.
+    run(['clang',*flags,'-ffunction-sections','-fdata-sections',
+         '-DCONFIG_ZONE_EDIT=0','-DCONFIG_CONTACT_EDIT=0','-DCONFIG_KEY_ASSIGN=0',
+         ROOT/'tests/classic/test_start_new.c',APP/'core/ui/ui_svc_storage.c',
+         APP/'core/codeplug/codeplug.c',APP/'core/settings/settings.c',
+         APP/'core/storage/storage.c',host/'sim/sim_flash.c',
+         '-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections',
+         '-o',OUT/'test_start_new'],cwd=ROOT)
+    run([OUT/'test_start_new'],cwd=ROOT)
+    if os.environ.get('DM32_CLASSIC_BACKUP'):
+        # Optional private regression input; never embedded in source or test fixtures.
+        with tempfile.TemporaryDirectory(dir=OUT) as scratch:
+            data=Path(scratch)/'data.bin'
+            with zipfile.ZipFile(os.environ['DM32_CLASSIC_BACKUP']) as archive:
+                data.write_bytes(archive.read('data.bin'))
+            run([OUT/'test_start_new',data],cwd=ROOT)
     # Run the existing comprehensive FM/DMR suite against the transformed core.
     run(['make','-B','radioCoreTest','SANITIZE=1'],cwd=host)
     run([host/'radioCoreTest'],cwd=host)

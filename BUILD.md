@@ -35,19 +35,21 @@ ZIP offered by the Firmware Utility:
 ```sh
 python3 tools/prepare_web_firmware.py \
   --image build/radiofoundry-p25/build/dm32-p25-classic/rfoundry_dm32.bin \
-  --out artifacts/firmware/Open25-DM32-Classic-0.1.0-rc1-r4-application.zip
+  --out artifacts/firmware/Open25-DM32-Classic-0.1.0-rc1-r5-application.zip
 ```
 
 The packager verifies the application and linker-map hashes against the build
 manifest, checks the reserved codec layout, and writes only `firmware.json` and
 `application.bin`. It refuses to replace an existing ZIP. The runtime version is
-`open25-classic-0.1.0-rc1`; `r4` identifies this catalog/package revision.
+`open25-classic-0.1.0-rc1-r5`; `r5` identifies this catalog/package revision.
 Firmware binaries and ZIPs stay in ignored output directories and are never
 committed to GitHub. No build or packaging command opens or installs a radio.
 
-Installation requires a valid compatible DMR codec already in its reserved
-location. Normal installation preserves it along with the bootloader and data
-chip. Full backup/restore covers both complete chips, including the codec area.
+The installer preserves a valid compatible DMR codec in its reserved location.
+For first installation from recognized OEM .048/.049/NRF .049 firmware, it
+prepares that radio's own codec in the blank reserved slot. It preserves the
+bootloader and data chip. Full backup/restore covers both complete chips,
+including the codec area.
 Local `--with-local-stock` unit images contain proprietary material and must stay
 private; they are not inputs to this public packager.
 

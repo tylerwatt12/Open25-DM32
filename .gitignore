@@ -74,6 +74,7 @@
 !/tests/compat/radiofoundry_state.c
 !/tests/classic/test_channels.c
 !/tests/classic/test_radio.inc
+!/tests/classic/test_start_new.c
 !/tests/classic/test_ui.c
 !/tests/firstboot/stubs/FreeRTOS.h
 !/tests/firstboot/stubs/semphr.h
