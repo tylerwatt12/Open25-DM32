@@ -253,6 +253,9 @@ int native_lab_request(radio_sm_t *sm, const radio_req_t *r)
             channel_denial=radio_sm_tx_check(sm);
             sm->ptt=true;
             if(!channel_denial) {
+                /* ARMED is visible while mic prefill runs, before nt_begin. */
+                channel_tx_ms=sm->tx_start_ms=hal_millis();
+                sm->view.tx_elapsed_ms=0;sm->view.tot_warning=false;sm->tot_warned=false;
                 live_tx_pending=live_rx_pending=true;
                 p25_lab_channel_stop();
                 if(voice_owner){pending_start=0;nt_stop(&test,test.session,NT_USER_STOP);}

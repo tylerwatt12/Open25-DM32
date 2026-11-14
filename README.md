@@ -12,7 +12,8 @@ new interface with FM and conventional/trunked P25.
 
 **[Open the tools](https://kd8zmm.com/open25-dm32/)** ·
 **[Next CPS](https://kd8zmm.com/open25-dm32/cps/)** ·
-**[Firmware Utility](https://kd8zmm.com/open25-dm32/firmware.html)**
+**[Firmware Utility v1](https://kd8zmm.com/open25-dm32/firmware.html)** ·
+**[Firmware Utility v2](https://kd8zmm.com/open25-dm32/v2/firmware.html)**
 
 ## Choose your edition
 
@@ -22,7 +23,7 @@ new interface with FM and conventional/trunked P25.
 | Conventional P25 · Original RadioFoundry interface | Trunked P25 · New interface |
 | ![Classic P25 channel settings with talkgroup and NAC](images/classic-settings.png) | ![Next P25 system settings with WACN and System ID](images/next-settings.png) |
 | P25 channel settings: talkgroup, NAC, and radio ID | Trunked system settings: WACN and System ID |
-| **0.1.0-rc1-r6 release candidate available** | **Source will be provided on release.** |
+| **0.1.0-rc1-r7 release candidate available** | **Source will be provided on release.** |
 
 | Feature | Classic | Next |
 | --- | --- | --- |
@@ -50,14 +51,24 @@ Encryption support is still being tested with other radios and systems.
 ## Release status
 
 **Classic and Next are alpha firmware, and testing is still underway.**
-Classic **0.1.0-rc1-r6** is available in the
+Classic **0.1.0-rc1-r7** is available in the
 [Firmware Utility](https://kd8zmm.com/open25-dm32/firmware.html), under
 **Open25-DM32 Classic → Standard · DM-32UV**. Final on-air qualification is
 incomplete; compatibility with every DM-32UV hardware revision is not established.
 Next remains unavailable, with its release date to be determined.
 
-Revision r6 adds RadioFoundry-compatible codec layouts through NRFB .050 and
-extends the modem table window to match. Both flasher versions use the codec
+Revision r7 improves repeated P25 calls, receive recovery and switching between
+FM, DMR and P25. It keeps local warning beeps from interrupting P25 voice and
+preserves DCS signaling while sending DTMF. The underlying fixes were tested
+between two radios; the packaged build passes host regression and target build
+checks. Microphone/speaker audio, every hardware revision and all RF conditions
+have not been qualified.
+
+**Known issue:** PL/CTCSS signaling can drop while transmitting DTMF. Avoid
+relying on PL during DTMF until this is resolved.
+
+Revision r6 added RadioFoundry-compatible codec layouts through NRFB .050 and
+extended the modem table window to match. Both flasher versions use the codec
 read from your own radio. No proprietary codec is included.
 
 Revision r5 fixed **Start new** when the radio still contains another firmware's
@@ -78,8 +89,8 @@ and [THIRD_PARTY.md](THIRD_PARTY.md) for dependency notices.
 
 The package contains no proprietary DMR codec. The installer checks and preserves
 a compatible codec in the reserved location. For first installation from
-recognized OEM .048/.049/NRF .049 firmware, it prepares the radio's own codec in
-that blank slot. Unknown layouts or a damaged reserved slot stop before writing.
+recognized OEM codec layouts (.032 through NRFB .050), it prepares the radio's
+own codec in that blank slot. Unknown layouts or a damaged reserved slot stop before writing.
 The bootloader and data flash are preserved during installation. Full-backup
 restoration can replace both complete flash images. Keep backups private and
 use only this radio's backup.
@@ -91,9 +102,11 @@ use only this radio's backup.
   radio over USB, or save your programming to a file.
 - **[RadioFoundry CPS](https://radiofoundry.org/codeplug/index.html):** edit
   Classic's FM and DMR channels. Program Classic's P25 settings on the radio.
-- **[Firmware Utility](https://kd8zmm.com/open25-dm32/firmware.html):** install
+- **[Firmware Utility v1](https://kd8zmm.com/open25-dm32/firmware.html):** install
   compatible firmware packages, make verified full-radio backups, and restore
-  your radio from its backup.
+  your radio from its backup. If v1 isn't working, try
+  **[Firmware Utility v2](https://kd8zmm.com/open25-dm32/v2/firmware.html)**.
+  Both versions use the same firmware catalog and ZIP packages.
 
 > [!WARNING]
 > **THERE IS NO EASY WAY TO RESTORE THE RADIO WITHOUT A BACKUP.**

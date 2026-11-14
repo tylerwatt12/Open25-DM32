@@ -87,7 +87,7 @@ typedef struct nt_test {
     uint32_t session, generation, started_us, ping_us, boundary_us, drain_us;
     nt_record rx[NT_RX_CAP];
     nt_block tx[NT_TX_STORAGE_CAP];
-    uint8_t state, reason, owned, boundary_seen, key_requested, keyed, canceled, boundary_source;
+    uint8_t state, reason, owned, boundary_seen, key_requested, keyed, canceled, boundary_source, early_armed;
     uint8_t rx_head, rx_tail, rx_count, tx_head, tx_tail, tx_count;
 } nt_test;
 void nt_init(nt_test *, const nt_ops *);

@@ -13,6 +13,9 @@
 #include "debuglink/dl_fmt.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#if CONFIG_BEEP
+#include "radio/beep.h"
+#endif
 #if CONFIG_DEV_TX
 #include "input/input.h"
 #endif
@@ -253,6 +256,10 @@ static void audio_block(const int16_t *mic,int16_t *spk,void *ctx)
         if(sample_checks)for(unsigned i=0;i<160;i++)played_nonzero+=spk[i]!=0;
     }
     taskEXIT_CRITICAL();
+#if CONFIG_BEEP
+    /* Local feedback shares playback; never mix it into TX microphone PCM. */
+    beep_mix(spk);
+#endif
     /* Keep the digital route through silence and buffering. Toggling it inside
      * this callback empties the driver's queue and discards the current block. */
 }
@@ -359,7 +366,7 @@ static int receive_run(void)
     uint16_t index=0;
 #endif
 #if CONFIG_P25_NATIVE
-    uint32_t last_tick=0,last_record_at=hal_millis();
+    uint32_t last_tick=0,last_record_at=hal_millis(),last_valid_at=0;
     int silent_reset=0;
 #endif
     while(ok && !stop_requested) {
@@ -390,7 +397,10 @@ static int receive_run(void)
                 uint32_t delta=r.time_us-last_tick;
                 if(last_tick && (delta>45000u || delta<15000u)) { gaps++;reset_stream(); }
                 last_tick=r.time_us;last_record_at=hal_millis();silent_reset=0;
+                if(!records)last_valid_at=hal_millis();
+                uint32_t prior_frames=voice.rx_frames;
                 consume(r.sequence,(uint8_t)(r.rx_info&3u),r.raw);
+                if(voice.rx_frames!=prior_frames)last_valid_at=hal_millis();
                 if (request_mode==5) vTaskDelay(1);
             } else {
                 if(!silent_reset && hal_millis()-last_record_at>500) {
@@ -398,6 +408,10 @@ static int receive_run(void)
                 }
                 relax();
             }
+            /* Noise records cannot keep old PHY synchronization alive. Let
+             * the normal channel owner rearm between complete frames. */
+            if(request_mode==5 && records && !voice.framer.symbols &&
+               (uint32_t)(hal_millis()-last_valid_at)>=500u)break;
 #else
             ok=0;
 #endif

@@ -198,6 +198,25 @@ def prepare():
     transform("boards/dm32/freertos_board.h", [("#define configTOTAL_HEAP_SIZE\t(32 * 1024 + 512)",
         "#if CONFIG_P25 && (CONFIG_P25_BENCH || CONFIG_DEV_TX)\n#define configTOTAL_HEAP_SIZE (40 * 1024 + 512)\n#elif CONFIG_P25\n#define configTOTAL_HEAP_SIZE (36 * 1024 + 512)\n#else\n#define configTOTAL_HEAP_SIZE (32 * 1024 + 512)\n#endif")])
     classic_channels.prepare(transform)
+    # A pending shared beep remains owned by beep.c when digital PCM stops.
+    # Reuse the existing own-stream startup and failure cleanup at handoff.
+    beep_source=(UP/'core/radio/beep.c').read_text()
+    own_begin=beep_source.index('\t\t// Always (re)start:')
+    own_end=beep_source.index('\n\t}\n\tstats.played++;',own_begin)
+    own_body=beep_source[own_begin:own_end]
+    transform('core/radio/beep.c', [
+        (own_body,'\t\tif (!start_own_stream()) return;'),
+        ('void beep_play(beep_t b, uint8_t level, bool shared)',
+         'static bool start_own_stream(void)\n{\n'+
+         '\n'.join(line[1:] if line.startswith('\t') else line for line in
+                   own_body.replace('\t\t\treturn;','\t\t\treturn false;').splitlines())+
+         '\n    return true;\n}\n\nvoid beep_play(beep_t b, uint8_t level, bool shared)'),
+        ('\tif (!own_stream) {\n\t\treturn;\n\t}', '''\tif (!own_stream) {
+        if (!shared && beep_busy() && aud != NULL && aud->start != NULL)
+            start_own_stream();
+\t\treturn;
+\t}'''),
+    ])
     for p in sorted((ROOT / "src/p25").glob("*")):
         if p.suffix in (".c", ".h", ".inc"):
             write_owned(DEST / "core/p25" / p.name, p.read_bytes())
@@ -281,7 +300,7 @@ def main():
     suffix += ("-lean" if args.lean else "") + ("-cpu" if args.cpu_profile else "") + ("-dev" if args.dev_update else "") + ("-tx" if args.tx_bench else "")
     if args.classic:
         suffix='classic'
-        identity='classic-0.1.0-rc1-r6'
+        identity='classic-0.1.0-rc1-r7'
     b = f"build/dm32-p25-{suffix}"
     command = ["make", "-j8", "BOARD=dm32", f"CROSS={ROOT}/toolchain/bin/csky-elf-", f"BUILD={b}",
         "CONFIG_P25=" + ("n" if args.disable else "y"), "CONFIG_P25_NATIVE="+("y" if native else "n"), "CONFIG_DMR_IP_GATEWAY=n", "CONFIG_NET_PPP=n",
@@ -333,7 +352,8 @@ def main():
                 "lock":("native_lock",),"unlock":("native_unlock",),
                 "native_lab_command":("snapshot",),
                 "p25_voice_rx_dibit":("core/p25/p25_lab.c:sink","core/p25/selftest.c:sink"),
-                "audio_task":("core/p25/p25_lab.c:audio_block",),
+                "audio_task":("core/p25/p25_lab.c:audio_block","core/p25/p25_lab.c:mic_block")
+                    if args.classic or args.tx_bench else ("core/p25/p25_lab.c:audio_block",),
                 "start_audio":("playback_pace",),
                 "p25_lab_command":("playback_stats",)}.items():
                 extra+="call "+caller+" "+" ".join(targets)+"\n"

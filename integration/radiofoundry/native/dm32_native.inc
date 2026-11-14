@@ -26,6 +26,7 @@ static int native_prepare(void *ctx, const nt_config *c)
 #endif
     hrc_audio_pcm_hold(true);
     audio(false);
+    rx_hz=c->frequency_hz; /* set_mode selects calibration from the board's receive frequency */
     set_mode(RADIO_MODE_DMR);
     hrc_dmr_leave(); /* dedicated PHY handlers replace the normal slot engine */
     if (!rx(c->frequency_hz,RADIO_BW_12K5,NULL)) return 0;

@@ -24,6 +24,13 @@ def main():
            '-fsanitize=address,undefined','-fno-sanitize-recover=undefined','-fno-omit-frame-pointer',
            '-I'+str(APP/'core'),'-I'+str(APP/'drivers'),'-I'+str(APP/'hal'),'-I'+str(host),
            '-D__attribute__(x)=','-DCONFIG_P25_CHANNELS=1','-DCONFIG_P25_NATIVE=1']
+    run(['clang',*flags,'-ffunction-sections','-fdata-sections','-DCONFIG_DEV_TX=1',
+         '-DCONFIG_P25_BENCH=0','-I'+str(ROOT/'tests/audio/stubs'),
+         '-I'+str(APP/'core/p25'),ROOT/'tests/classic/test_p25_audio.c',
+         APP/'core/p25/audio_fifo.c',APP/'core/radio/beep.c',
+         '-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections',
+         '-o',OUT/'test_p25_audio'],cwd=ROOT)
+    run([OUT/'test_p25_audio'],cwd=ROOT)
     run(['clang',*flags,ROOT/'tests/classic/test_channels.c',APP/'core/codeplug/codeplug.c',
          APP/'core/storage/storage.c',host/'sim/sim_flash.c','-o',OUT/'test_channels'],cwd=ROOT)
     run([OUT/'test_channels'],cwd=ROOT)
@@ -44,6 +51,10 @@ def main():
                 data.write_bytes(archive.read('data.bin'))
             run([OUT/'test_start_new',data],cwd=ROOT)
     # Run the existing comprehensive FM/DMR suite against the transformed core.
+    run(['make','-B','fd6818Test','SANITIZE=1'],cwd=host)
+    run([host/'fd6818Test'],cwd=host)
+    run(['make','-B','hrc7000DmrTest','SANITIZE=1'],cwd=host)
+    run([host/'hrc7000DmrTest'],cwd=host)
     run(['make','-B','radioCoreTest','SANITIZE=1'],cwd=host)
     run([host/'radioCoreTest'],cwd=host)
     fixture=(host/'radioCoreTest.c').read_text().replace('int main(void)','int upstream_radio_main(void)')

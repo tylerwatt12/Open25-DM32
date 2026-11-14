@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "radio/beep.h"
 /* Real Classic admission/state machine/native controller; worker and RF are fixtures. */
 static nt_test *classic_live;
 static bool classic_busy, classic_stop, classic_receiving;
@@ -50,8 +51,17 @@ static void classic_select(bool receive)
 }
 static void classic_press(void)
 {
+    sm.tx_start_ms=now-197000u;sm.view.tx_elapsed_ms=197000;
+    sm.view.tot_s=15;sm.set.tot_warn_s=10;
+    sm.tot_warned=true;sm.view.tot_warning=true;
+    beep_stats_t prior_beeps,after_beeps;beep_get_stats(&prior_beeps);
+    int prior_starts=aud.starts;
     radio_req_t p={.type=RREQ_PTT,.arg=1};CHECK(native_lab_request(&sm,&p)==1);
+    CHECK(sm.tx_start_ms==now&&!sm.view.tx_elapsed_ms&&!sm.tot_warned&&!sm.view.tot_warning);
     classic_pump();classic_pump();
+    radio_sm_native_maintenance(&sm,now+100);
+    beep_get_stats(&after_beeps);
+    CHECK(!sm.view.tot_warning&&after_beeps.played==prior_beeps.played&&aud.starts==prior_starts);
     uint8_t raw[36]={0};
     CHECK(native_lab_live_block(classic_sid,raw,0));CHECK(native_lab_live_block(classic_sid,raw,0));
     CHECK(native_lab_live_go(classic_sid));classic_pump();
@@ -74,6 +84,14 @@ static void test_classic_ownership(void)
         sm.view.ch=saved;sm.set.tx_inhibit=false;sm.batt.level=BATT_OK;sm.set.bcl=RADIO_BCL_OFF;
     }
     classic_press();
+    beep_stats_t prior_beeps,after_beeps;beep_get_stats(&prior_beeps);
+    int prior_starts=aud.starts;
+    now+=5000;radio_sm_native_maintenance(&sm,now);beep_get_stats(&after_beeps);
+    CHECK(sm.view.tot_warning&&sm.tot_warned&&after_beeps.played==prior_beeps.played+1);
+    CHECK(aud.starts==prior_starts&&beep_busy()); /* warning cannot replace P25 PCM */
+    int16_t local_beep[160]={0};
+    for(unsigned i=0;i<30;i++){memset(local_beep,0,sizeof local_beep);beep_mix(local_beep);}
+    CHECK(!beep_busy());
     sm.view.tot_s=1;now+=1000;classic_pump();
     CHECK(!classic_live->owned && !classic_live->keyed && sm.view.tx_deny==TXDENY_TIMEOUT);
     radio_req_t up={.type=RREQ_PTT,.arg=0};CHECK(native_lab_request(&sm,&up)==1);
@@ -95,9 +113,36 @@ static void test_classic_ownership(void)
     uint8_t raw_arm[17]={1},reply[512];
     CHECK(native_lab_command(raw_arm,sizeof raw_arm,reply,sizeof reply)==1 && reply[0]!=0);
 }
+static void test_classic_idle_rearm(void)
+{
+    classic_select(true);
+    uint32_t old=classic_sid;unsigned starts_before=classic_starts;
+    /* The RX worker's normal idle exit uses this existing stop/release path. */
+    native_lab_voice_stop(old);classic_pump();
+    CHECK(!classic_live->owned && classic_live->state==NT_STOPPED && !classic_live->stats.faults);
+    CHECK(native_lab_voice_release(old));classic_busy=false;
+    classic_pump();classic_pump();
+    CHECK(classic_live->state==NT_RX && classic_sid!=old && classic_starts==starts_before+1);
+    uint8_t s,r;CHECK(!native_lab_voice_poll(old,&s,&r) && !native_lab_voice_release(old));
+    CHECK(classic_live->state==NT_RX && !classic_live->keyed && !hw.tx_calls);
+
+    classic_select(true);old=classic_sid;
+    native_lab_voice_stop(old);
+    radio_req_t down={.type=RREQ_PTT,.arg=1};
+    CHECK(native_lab_request(&sm,&down)==1);
+    classic_pump();classic_pump();
+    CHECK(classic_sid!=old && classic_live->state==NT_ARMED && classic_live->config.mode==NT_TRANSMIT);
+    CHECK(!native_lab_voice_release(old)); /* late RX cleanup cannot release the pending TX */
+    uint8_t block[36]={0};
+    CHECK(native_lab_live_block(classic_sid,block,0) && native_lab_live_block(classic_sid,block,0));
+    CHECK(native_lab_live_go(classic_sid));classic_pump();
+    CHECK(classic_live->state==NT_TX && !classic_live->keyed && !hw.tx_calls);
+    down.arg=0;CHECK(native_lab_request(&sm,&down)==1);classic_pump();classic_pump();classic_pump();
+    CHECK(classic_live->state==NT_RX && !sm.ptt && !classic_live->keyed && !hw.tx_calls);
+}
 int main(void)
 {
-    int prior=upstream_radio_main();test_classic_ownership();
+    int prior=upstream_radio_main();test_classic_ownership();test_classic_idle_rearm();
     printf("Classic real FM/DMR/P25 admission and ownership: %d failures\n",failures);
     return prior || failures ? 1 : 0;
 }

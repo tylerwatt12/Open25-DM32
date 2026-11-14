@@ -4,6 +4,7 @@
 from pathlib import Path
 import subprocess
 import re
+import sys
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'build/audio-host'
 APP=ROOT/'build/radiofoundry-p25'
@@ -19,7 +20,7 @@ def main():
            '-I'+str(APP/'hal'),'-DCONFIG_P25_NATIVE=1']
     objects=[]
     sources=[ROOT/'src/p25'/f'{name}.c' for name in ('p25','voice','phy_stream','selftest','audio_fifo')]
-    sources += [ROOT/'integration/radiofoundry/p25_lab.c',ROOT/'integration/radiofoundry/cpu_profile.c',APP/'core/debuglink/dl_fmt.c',ROOT/'tests/audio/test_receive_lab.c']
+    sources += [ROOT/'integration/radiofoundry/p25_lab.c',ROOT/'integration/radiofoundry/cpu_profile.c',APP/'core/debuglink/dl_fmt.c',APP/'core/radio/beep.c',ROOT/'tests/audio/test_receive_lab.c']
     for source in sources:
         obj=OUT/(source.stem+'.o')
         run(['clang','-std=c11',*flags,'-c',source,'-o',obj]);objects.append(obj)
@@ -35,6 +36,15 @@ def main():
     hashes=re.findall(r'PCM_CALLBACK_CRC=([0-9a-f]{8})',baseline)
     if len(hashes)!=1 or hashes!=re.findall(r'PCM_CALLBACK_CRC=([0-9a-f]{8})',optimized):
         raise SystemExit('Lean and bench speaker PCM differ')
+    idle=OUT/'test_receive_idle.o'
+    run(['clang','-std=c11',*flags,'-DCONFIG_P25_BENCH=0','-DCONFIG_DEV_TX=1',
+         '-DCONFIG_P25_CHANNELS=1','-DCONFIG_DMR=1','-ffunction-sections','-fdata-sections',
+         '-I'+str(ROOT/'integration/radiofoundry'),'-I'+str(ROOT/'integration/radiofoundry/native'),
+         'tests/audio/test_receive_idle.c','-c','-o',idle])
+    run(['clang++','-fsanitize=address,undefined',*common,idle,CODEC/'libdm32_imbe.a',
+         '-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections',
+         '-o',OUT/'test_receive_idle'])
+    run([OUT/'test_receive_idle'])
     run(['clang','-std=c11',*flags,'tests/test_audio_fifo.c','src/p25/audio_fifo.c','-o',OUT/'test_audio_fifo'])
     run([OUT/'test_audio_fifo'])
     run(['clang','-std=c11',*flags,'tests/test_pcm_clock.c','src/p25/pcm_clock.c','-o',OUT/'test_pcm_clock'])

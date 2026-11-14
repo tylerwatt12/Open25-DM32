@@ -71,7 +71,7 @@ static void finish(nt_test *t, uint8_t why, int fault)
     t->reason=why;
     t->stats.faults += fault!=0;
     if (t->owned) { t->ops->quiet(t->ops->ctx); t->stats.quiets++; }
-    t->keyed=t->key_requested=0;
+    t->keyed=t->key_requested=t->early_armed=0;
     t->tx_count=0; /* canceled queued blocks must never leak into the next run */
 }
 void nt_init(nt_test *t, const nt_ops *ops) { memset(t,0,sizeof *t); t->ops=ops; }
@@ -165,7 +165,20 @@ int nt_begin(nt_test *t, uint32_t sid, uint32_t now)
      * quiet again because setup may have enabled peripherals after STOP. */
     if (t->state!=NT_ARMED) { o->quiet(o->ctx); t->stats.quiets++; ok=0; }
     else if (!ok) finish(t,NT_IO,1);
-    else t->state=t->config.mode==NT_RECEIVE ? NT_RX : NT_TX;
+    else {
+        t->state=t->config.mode==NT_RECEIVE ? NT_RX : NT_TX;
+#if defined(CONFIG_DEV_TX) && CONFIG_DEV_TX
+        if (nt_tx_live(&t->config)) {
+            /* PHY_RDY can precede the first TX_SLOT. Stage its existing lead
+             * now; the normal slot still consumes that queue entry once. */
+            const nt_block *b=&t->tx[t->tx_tail];
+            int staged=t->tx_count && !b->index && o->write(o->ctx,b->raw);
+            if (t->state!=NT_TX) { o->quiet(o->ctx);t->stats.quiets++;ok=0; }
+            else if (!staged) { finish(t,NT_IO,1);ok=0; }
+            else t->early_armed=1;
+        }
+#endif
+    }
     if (o->unlock) o->unlock(o->ctx,irq);
     return ok;
 }
@@ -299,6 +312,11 @@ void nt_rx(nt_test *t, uint32_t now, uint32_t flags, uint32_t info, const uint8_
 void nt_abnormal(nt_test *t)
 {
     t->stats.abnormal_irqs++;
+    /* Continuous P25 voice is not DMR slot-framed. Keep the chip's slot
+     * warning visible without interrupting its receive/audio stream. */
+    if (t->state==NT_RX && t->config.p25_sync && t->config.audio) {
+        t->stats.ignored_irqs++; return;
+    }
 #if defined(CONFIG_FIRSTBOOT) && CONFIG_FIRSTBOOT
     /* A DMR slot-format warning was observed after three valid P25 RX blocks.
      * Keep it visible while testing stream continuity with TX compiled out. */
@@ -326,7 +344,7 @@ void nt_rf_tx(nt_test *t, uint32_t now)
         finish(t,NT_UNEXPECTED_RF,1); return;
 #endif
     }
-    if ((t->state!=NT_TX && t->state!=NT_DRAIN) || !t->stats.tx_sent) { t->stats.ignored_irqs++; return; }
+    if ((t->state!=NT_TX && t->state!=NT_DRAIN) || (!t->stats.tx_sent && !t->early_armed)) { t->stats.ignored_irqs++; return; }
     if (!t->key_requested) {
         t->key_requested=1;
 #if defined(CONFIG_DEV_TX) && CONFIG_DEV_TX

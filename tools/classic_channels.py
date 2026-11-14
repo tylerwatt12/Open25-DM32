@@ -3,6 +3,81 @@
 
 
 def prepare(transform):
+    transform('drivers/rf/fd6818/fd6818.c', [
+        ('static const regval_t dmr_table[] = {', '''static const regval_t dmr_table[] = {
+\t{ 0x51, 0x0000 }, // FM tone detection also enables subaudio TX; digital modulation comes from the C7000.'''),
+    ])
+    transform('tests/host/fd6818Test.c', [
+        ('static void test_rx_tones(void)', '''static void test_tone_to_dmr(void)
+{
+\tconst fd6818_tone_t tones[] = { FD6818_TONE_CTCSS, FD6818_TONE_DCS, FD6818_TONE_DCS_INV };
+\tconst uint16_t values[] = { 1000, 023, 023 };
+\tconst uint16_t enabled[] = { 0x9045, 0x8045, 0xA045 };
+\tfor (unsigned t = 0; t < sizeof tones / sizeof tones[0]; t++) {
+\t\tfd6818_t dev;
+\t\treset_chip();fd6818_attach(&dev, bus());
+\t\tfd6818_set_mode(&dev, FD6818_MODE_FM);
+\t\tfd6818_set_freq(&dev, 146520000u);
+\t\tfd6818_set_rx_tone(&dev, tones[t], values[t]);
+\t\tCHECK(chip.regs[FD6818_REG_SUBAUDIO] == enabled[t]);
+\t\tuint16_t frequency = chip.regs[FD6818_REG_CTCSS_FREQ], code = chip.regs[FD6818_REG_DCS_CODE];
+\t\tchip.regs[0x55] = 0xA55A;chip.regs[0x66] = 0x5AA5;
+\t\tfd6818_set_mode(&dev, FD6818_MODE_DMR);
+\t\tCHECK(chip.regs[FD6818_REG_SUBAUDIO] == 0);
+\t\tCHECK(chip.regs[FD6818_REG_CTCSS_FREQ] == frequency && chip.regs[FD6818_REG_DCS_CODE] == code);
+\t\tCHECK(chip.regs[0x55] == 0xA55A && chip.regs[0x66] == 0x5AA5 && dev.freq_10hz == 14652000u);
+\t\tfor (unsigned burst = 0; burst < 3; burst++) {
+\t\t\tfd6818_dmr_burst(&dev, true, FD6818_BW_DMR);
+\t\t\tCHECK(dev.state == FD6818_STATE_TX && !chip.regs[FD6818_REG_SUBAUDIO]);
+\t\t\tfd6818_dmr_burst(&dev, false, FD6818_BW_DMR);
+\t\t\tCHECK(dev.state == FD6818_STATE_RX && !chip.regs[FD6818_REG_SUBAUDIO]);
+\t\t}
+\t\tfd6818_set_mode(&dev, FD6818_MODE_FM);
+\t\tfd6818_set_rx_tone(&dev, tones[t], values[t]);
+\t\tCHECK(chip.regs[FD6818_REG_SUBAUDIO] == enabled[t]);
+\t\tCHECK(chip.regs[FD6818_REG_CTCSS_FREQ] == frequency && chip.regs[FD6818_REG_DCS_CODE] == code);
+\t\tCHECK(!chip.protocol_errors && !chip.crit_depth);
+\t}
+}
+
+static void test_rx_tones(void)'''),
+        ('\ttest_rx_tones();', '\ttest_rx_tones();\n\ttest_tone_to_dmr();'),
+    ])
+    transform('drivers/modem/hrc7000/hrc7000.c', [
+        ('\t\thrc7000_wr(d, C7_SUBVOICE_COEF, (d->subvoice & ~0xFF00u) | ((uint32_t)dev << 8));', '''\t\t// Subaudio and DTMF share gain: preserve the PL level and signed DCS polarity.
+\t\tif (hrc7000_rd(d, C7_FM_MOD) & (FM_MOD_CTCSS | FM_MOD_CDCSS))
+\t\t\tdev = (uint8_t)(d->subvoice >> 8);
+\t\thrc7000_wr(d, C7_SUBVOICE_COEF, (d->subvoice & ~0xFF00u) | ((uint32_t)dev << 8));'''),
+    ])
+    transform('tests/host/hrc7000DmrTest.c', [
+        ('static void test_subtone(void)', '''static void test_dtmf_with_subtone(void)
+{
+\tconst hrc7000_tone_t tones[] = { HRC7000_TONE_NONE, HRC7000_TONE_CTCSS,
+\t\tHRC7000_TONE_DCS, HRC7000_TONE_DCS_INV };
+\tfor (unsigned t = 0; t < sizeof tones / sizeof tones[0]; t++) {
+\t\tfor (unsigned wide = 0; wide < 2; wide++) {
+\t\t\tsetup();
+\t\t\tdev.subaudio_dev = 0x28;
+\t\t\tREG(C7_SUBVOICE_COEF) = 0x07D02830u;
+\t\t\thrc7000_set_subtone(&dev, true, tones[t], t == 1 ? 1000 : 0023);
+\t\t\thrc7000_fm_tx(&dev, wide != 0);
+\t\t\tuint32_t saved = REG(C7_SUBVOICE_COEF), mod = REG(C7_FM_MOD);
+\t\t\tuint8_t requested = hrc7000_dtmf_dev(146520000u, wide != 0);
+\t\t\tuint32_t sounding = t ? saved : (saved & ~0xFF00u) | ((uint32_t)requested << 8);
+\t\t\tCHECK(hrc7000_tx_dtmf(&dev, '5', requested));
+\t\t\tCHECK(REG(C7_SUBVOICE_COEF) == sounding && REG(C7_FM_MOD) == (mod | 2u));
+\t\t\tif (t >= 2) CHECK((REG(C7_SUBVOICE_COEF) & 0x8000u) == 0);
+\t\t\tCHECK(hrc7000_tx_dtmf(&dev, '9', requested));
+\t\t\tCHECK(REG(C7_SUBVOICE_COEF) == sounding);
+\t\t\tCHECK(hrc7000_tx_dtmf(&dev, 0, 0));
+\t\t\tCHECK(REG(C7_SUBVOICE_COEF) == saved && REG(C7_FM_MOD) == mod && !dev.tone_on);
+\t\t}
+\t}
+}
+
+static void test_subtone(void)'''),
+        ('\ttest_tx_tone();\n\ttest_subtone();', '\ttest_tx_tone();\n\ttest_dtmf_with_subtone();\n\ttest_subtone();'),
+    ])
     transform('core/codeplug/codeplug.h', [
         ('typedef struct {\n\tchar name[CODEPLUG_NAME_LEN + 1];\n\tuint32_t rx_hz;', '''#if CONFIG_P25_CHANNELS
 enum { RADIO_MODE_P25 = 2 };
@@ -121,6 +196,8 @@ void radio_sm_native_maintenance(radio_sm_t *sm, uint32_t now_ms);
 #endif'''),
     ])
     transform('core/radio/radio_sm.c', [
+        ('#include "config.h"', '#include "config.h"\n#if CONFIG_P25_CHANNELS\n#include "p25/p25_lab.h"\n#endif'),
+        ('\tshared = ambeVoiceStreaming();\n#endif', '\tshared = ambeVoiceStreaming();\n#endif\n#if CONFIG_P25_CHANNELS\n\tshared = shared || p25_lab_busy();\n#endif', 2),
         ('static uint8_t tx_check(const radio_sm_t *sm)', 'uint8_t radio_sm_tx_check(const radio_sm_t *sm)'),
         ('tx_check(sm)', 'radio_sm_tx_check(sm)', 4),
         ('\tcase RREQ_PTT:\n#if CONFIG_FM_TX_TONES', '\tcase RREQ_PTT:\n\t\t/* P25 PTT is handled by the native owner before this state machine. */\n\t\tif (codeplug_mode_p25(sm->view.ch.mode)) break;\n#if CONFIG_FM_TX_TONES'),
@@ -158,7 +235,7 @@ void radio_sm_native_maintenance(radio_sm_t *sm, uint32_t now_ms)
 \tif (sm->view.state == RS_TX) tx_timer(sm, now_ms);
 \toutputs(sm);
 #if CONFIG_BEEP
-\tbeep_service(false);
+\tbeep_service(p25_lab_busy());
 #endif
 }
 #endif

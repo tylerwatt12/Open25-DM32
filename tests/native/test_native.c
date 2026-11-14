@@ -47,20 +47,20 @@ static void valid_tx(void)
 }
 static void independent_boundary_phases(void)
 {
-    /* Actual first attempt: TX slot primed at 7,651 us; PHY_RDY at 34,006.
-     * The 26,355-us cross-source gap must not advance or fault the TX clock. */
+    /* Synthetic independent phases: another source must not advance or fault
+     * the selected TX clock, whose accepted slots remain 30 ms apart. */
     begin(NT_TRANSMIT,4,0);
-    nt_boundary(&t,NT_IRQ_TX_SLOT,7651);
-    nt_boundary(&t,NT_IRQ_RX_SLOT,8000);
-    nt_boundary(&t,NT_IRQ_PHY,34006);
+    nt_boundary(&t,NT_IRQ_TX_SLOT,8000);
+    nt_boundary(&t,NT_IRQ_RX_SLOT,9000);
+    nt_boundary(&t,NT_IRQ_PHY,34000);
     assert(t.state==NT_TX && t.stats.tx_sent==1 && !t.stats.faults);
-    nt_boundary(&t,NT_IRQ_TX_SLOT,37651);
+    nt_boundary(&t,NT_IRQ_TX_SLOT,38000);
     assert(t.stats.tx_sent==2 && t.stats.last_gap_us==30000);
     /* Other sources do not hide a stalled selected source. */
-    nt_boundary(&t,NT_IRQ_PHY,64006);
-    nt_boundary(&t,NT_IRQ_RX_SLOT,67651);
-    nt_boundary(&t,NT_IRQ_PHY,94006);
-    nt_tick(&t,97651);
+    nt_boundary(&t,NT_IRQ_PHY,64000);
+    nt_boundary(&t,NT_IRQ_RX_SLOT,68000);
+    nt_boundary(&t,NT_IRQ_PHY,94000);
+    nt_tick(&t,98000);
     assert(t.state==NT_FAULT && t.reason==NT_STALLED && t.stats.tx_sent==2);
     begin(NT_TRANSMIT,4,0);nt_boundary(&t,NT_IRQ_TX_SLOT,1000);
     nt_boundary(&t,NT_IRQ_PHY,1500);nt_boundary(&t,NT_IRQ_TX_SLOT,21000);
@@ -130,6 +130,31 @@ static void receive(void)
     begin(NT_RECEIVE,3,0xfffffff0u);
     for(unsigned i=1;i<20;i++) { uint32_t now=0xfffffff0u+i*100000u; assert(nt_ping(&t,t.session,now)); }
     nt_tick(&t,0xfffffff0u+2000000u); assert(t.reason==NT_RX_DURATION && t.state==NT_STOPPED);
+}
+static void voice_rx_slot_warning(void)
+{
+    uint8_t raw[36];memset(raw,0x5a,sizeof raw);
+    reset();assert(nt_arm_voice(&t,145500000,1000) && nt_begin(&t,t.session,0));
+    nt_abnormal(&t);
+    assert(t.state==NT_RX && t.reason==NT_OK && t.owned);
+    assert(t.stats.abnormal_irqs==1 && t.stats.ignored_irqs==1 && !t.stats.faults && !m.offs);
+    for(unsigned i=0;i<2;i++) {
+        nt_rx(&t,1000+i*30000,0x800,3,raw);
+        nt_record r;assert(nt_pop(&t,t.session,&r) && r.sequence==i && !memcmp(r.raw,raw,36));
+    }
+    nt_pa_ready(&t,32000);
+    assert(t.stats.rx_seen==2 && t.stats.rx_read==2 && !t.stats.pa_keys && !m.requests && !m.keys);
+    assert(nt_stop(&t,t.session,NT_USER_STOP) && nt_cleanup(&t) && m.offs==1 && m.restores==1);
+    /* Raw P25 capture and non-P25 voice retain the original fatal warning. */
+    begin(NT_RECEIVE,3,0);nt_abnormal(&t);
+    assert(t.state==NT_FAULT && t.reason==NT_ABNORMAL && t.stats.faults==1 && nt_cleanup(&t));
+    reset();assert(nt_arm_voice(&t,145500000,1000));t.config.p25_sync=0;
+    assert(nt_begin(&t,t.session,0));nt_abnormal(&t);
+    assert(t.state==NT_FAULT && t.reason==NT_ABNORMAL && !m.keys && nt_cleanup(&t));
+    /* An RX-time RF-start is still a fault; this change ignores no RF event. */
+    reset();assert(nt_arm_voice(&t,145500000,1000) && nt_begin(&t,t.session,0));
+    nt_rf_tx(&t,1000);
+    assert(t.state==NT_FAULT && t.reason==NT_UNEXPECTED_RF && !m.requests && !m.keys && nt_cleanup(&t));
 }
 static unsigned prep_count,fast_count,irq_count,restore_count;
 static int hprepare(void *p,const nt_config *c) { (void)p;(void)c;prep_count++;return 1; }
@@ -214,7 +239,7 @@ static void fuzz(void)
 }
 int main(void)
 {
-    valid_tx(); independent_boundary_phases(); failures(); receive(); chip_tests(); fuzz();
+    valid_tx(); independent_boundary_phases(); failures(); receive(); voice_rx_slot_warning(); chip_tests(); fuzz();
     reset();assert(!nt_arm_voice(&t,145500000,0));assert(!nt_arm_voice(&t,145500000,300001));
     assert(nt_arm_voice(&t,145500000,300000));assert(t.config.mode==NT_RECEIVE && t.config.audio && t.config.duration_ms==300000);
     assert(nt_begin(&t,t.session,0));assert(!nt_load(&t,t.session,0,(uint8_t[36]){0}));

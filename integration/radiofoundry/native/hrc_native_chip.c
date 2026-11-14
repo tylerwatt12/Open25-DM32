@@ -57,9 +57,26 @@ static int start(void *ctx, nt_test *t)
     for (unsigned i=0;i<HN_REGS;i++) d->saved[i]=hrc7000_rd(d->modem,regs[i]);
     d->saved_rf_mode=hrc7000_rd(d->modem,C7_RF_MODE);
     d->saved_valid=1;
+    int reset_phy=0;
+#if CONFIG_DEV_TX
+    reset_phy=t->config.p25_sync && t->config.audio &&
+        (t->config.mode==NT_TRANSMIT || (!t->config.blocks && !t->config.duration_ms));
+#endif
     w(d,C7_LAYER2_TXRX_CTRL,0); w(d,C7_LAYER2_SLOTON,0);
-    if(t->config.mode==NT_TRANSMIT && t->config.audio) w(d,C7_LAYER2_CONTROL,0);
-    w(d,C7_WORK_MODE,C7_WORK_MODE_FM); w(d,C7_WORK_MODE,0x02);
+    if((t->config.mode==NT_TRANSMIT && t->config.audio) || reset_phy) w(d,C7_LAYER2_CONTROL,0);
+    w(d,C7_WORK_MODE,C7_WORK_MODE_FM);
+#if CONFIG_DEV_TX
+    if (reset_phy) {
+        /* SYS reset control self-releases the PHY request; other modules and
+         * register configuration stay intact (guide 4.1.2.2/4.1.4.1). */
+        uint32_t reset=hrc7000_rd(d->modem,C7_SYS_SOFT_RSTN);
+        w(d,C7_SYS_SOFT_RSTN,reset&~2u);
+        unsigned i=0;
+        while (i<1024u && !(hrc7000_rd(d->modem,C7_SYS_SOFT_RSTN)&2u)) i++;
+        if (i==1024u) { w(d,C7_SYS_SOFT_RSTN,reset);return 0; }
+    }
+#endif
+    w(d,C7_WORK_MODE,0x02);
     if (t->config.mode==NT_RECEIVE && t->config.p25_sync) {
         /* P25 owns one continuous receive stream; restore the DMR path on exit. */
         w(d,C7_RF_MODE,d->saved_rf_mode&~(1u<<11));
