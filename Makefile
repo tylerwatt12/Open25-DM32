@@ -14,6 +14,7 @@ protocol-test:
 	sh tests/protocol/run_sanitizers.sh
 
 codec-test:
+	python3 tools/test_codec_slot.py
 	python3 experiments/codec/build.py --full-ubsan
 	mkdir -p artifacts/codec-tests logs
 	experiments/codec/out/ubsan/codec_harness --frames 2000 --fuzz 10000 --out-prefix artifacts/codec-tests/synthetic > logs/codec-tests.json

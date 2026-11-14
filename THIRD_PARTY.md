@@ -17,3 +17,8 @@ Build dependency source remains available at its pinned upstream location.
 Proprietary AMBE material is supplied by the user locally. No stock firmware,
 bootloader/helper image, radio dump, calibration or key material is distributed
 in this source tree.
+
+The DM32 codec-table SRAM limit is backported from RadioFoundry commit
+`88283f6ce3aab4c5ff5c9995600de2acfa2c6f7b` (MIT), extending the exclusive
+end from `0x18003E28` to `0x18003E38` for NRFB .050. The generated board
+registry and package metadata derive this value from the linker symbol.

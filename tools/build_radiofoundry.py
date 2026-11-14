@@ -67,6 +67,19 @@ def prepare():
     if git(DEST, "rev-parse", "HEAD") != PIN:
         raise SystemExit("Refusing incompatible derivative HEAD")
     run(["git", "-C", DEST, "submodule", "update", "--init", "third_party/FreeRTOS-Kernel"])
+    # RadioFoundry 88283f6: NRFB .050 tables extend 16 bytes beyond NRF .049.
+    transform("boards/dm32/memory.ld", [
+        ("0x18003E28", "0x18003E38", 2),
+    ])
+    # Refresh the existing generated registry from its authoritative linker
+    # symbol. The pinned host tools consume this JSON on Python 3.9 as well.
+    registry_path = "tools/rfoundry/rfoundry/registry.json"
+    original_registry = (UP / registry_path).read_bytes()
+    registry = json.loads(original_registry)
+    table_end = int(re.search(r"__codec_tab_hi = (0x[0-9A-Fa-f]+);",
+                             (DEST / "boards/dm32/memory.ld").read_text())[1], 16)
+    registry["boards"]["dm32"]["codec_tables"][1] = table_end
+    write_owned(DEST / registry_path, (json.dumps(registry, indent=1) + "\n").encode(), original_registry)
     transform("config/features.mk", [
         ('# Dependencies\n', 'CONFIG_P25 ?= n\nCONFIG_P25_NATIVE ?= n\nCONFIG_FIRSTBOOT ?= n\nCONFIG_P25_BENCH ?= y\nCONFIG_CPU_PROFILE ?= n\nCONFIG_DEV_UPDATE ?= n\nCONFIG_DEV_TX ?= n\nCONFIG_P25_CHANNELS ?= n\nFEATURES += P25 P25_NATIVE FIRSTBOOT P25_BENCH CPU_PROFILE DEV_UPDATE DEV_TX P25_CHANNELS\nifeq ($(CONFIG_DEV_TX),y)\nifneq ($(CONFIG_P25_NATIVE),y)\n$(error DEV_TX requires P25_NATIVE=y)\nendif\nendif\nifeq ($(CONFIG_DEV_UPDATE),y)\nifneq ($(CONFIG_FIRSTBOOT)$(CONFIG_STUB_ENTRY),yy)\n$(error DEV_UPDATE requires FIRSTBOOT=y STUB_ENTRY=y)\nendif\nendif\nifeq ($(CONFIG_FIRSTBOOT),y)\nifneq ($(CONFIG_CPS_OPENFW)$(CONFIG_CPS_FAST),nn)\n$(error FIRSTBOOT requires CPS_OPENFW=n CPS_FAST=n)\nendif\nifneq ($(CONFIG_STUB_ENTRY),$(CONFIG_DEV_UPDATE))\n$(error FIRSTBOOT requires STUB_ENTRY to match DEV_UPDATE)\nendif\nendif\nifeq ($(CONFIG_P25_NATIVE),y)\nifneq ($(CONFIG_P25)$(CONFIG_DMR),yy)\n$(error P25_NATIVE needs P25=y and DMR=y)\nendif\nendif\n\n# Dependencies\n'),
     ])
@@ -268,7 +281,7 @@ def main():
     suffix += ("-lean" if args.lean else "") + ("-cpu" if args.cpu_profile else "") + ("-dev" if args.dev_update else "") + ("-tx" if args.tx_bench else "")
     if args.classic:
         suffix='classic'
-        identity='classic-0.1.0-rc1-r5'
+        identity='classic-0.1.0-rc1-r6'
     b = f"build/dm32-p25-{suffix}"
     command = ["make", "-j8", "BOARD=dm32", f"CROSS={ROOT}/toolchain/bin/csky-elf-", f"BUILD={b}",
         "CONFIG_P25=" + ("n" if args.disable else "y"), "CONFIG_P25_NATIVE="+("y" if native else "n"), "CONFIG_DMR_IP_GATEWAY=n", "CONFIG_NET_PPP=n",

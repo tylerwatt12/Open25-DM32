@@ -22,7 +22,7 @@ new interface with FM and conventional/trunked P25.
 | Conventional P25 · Original RadioFoundry interface | Trunked P25 · New interface |
 | ![Classic P25 channel settings with talkgroup and NAC](images/classic-settings.png) | ![Next P25 system settings with WACN and System ID](images/next-settings.png) |
 | P25 channel settings: talkgroup, NAC, and radio ID | Trunked system settings: WACN and System ID |
-| **0.1.0-rc1-r5 release candidate available** | **Source will be provided on release.** |
+| **0.1.0-rc1-r6 release candidate available** | **Source will be provided on release.** |
 
 | Feature | Classic | Next |
 | --- | --- | --- |
@@ -50,13 +50,17 @@ Encryption support is still being tested with other radios and systems.
 ## Release status
 
 **Classic and Next are alpha firmware, and testing is still underway.**
-Classic **0.1.0-rc1-r5** is available in the
+Classic **0.1.0-rc1-r6** is available in the
 [Firmware Utility](https://kd8zmm.com/open25-dm32/firmware.html), under
 **Open25-DM32 Classic → Standard · DM-32UV**. Final on-air qualification is
 incomplete; compatibility with every DM-32UV hardware revision is not established.
 Next remains unavailable, with its release date to be determined.
 
-Revision r5 fixes **Start new** when the radio still contains another firmware's
+Revision r6 adds RadioFoundry-compatible codec layouts through NRFB .050 and
+extends the modem table window to match. Both flasher versions use the codec
+read from your own radio. No proprietary codec is included.
+
+Revision r5 fixed **Start new** when the radio still contains another firmware's
 settings. It initializes Classic's storage only after that choice and reports
 success after the new codeplug and requested edit are saved.
 

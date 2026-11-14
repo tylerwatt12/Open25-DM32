@@ -41,12 +41,12 @@ def main():
                re.findall(r'(0x[0-9a-fA-F]+)\s+(__codec_\w+)\s*=', map_bytes.decode())}
     expected = {'__codec_slot': 0x030e8000, '__codec_slot_end': 0x03100000,
                 '__codec_run_lo': 0x43a00, '__codec_run_hi': 0x58000,
-                '__codec_tab_lo': 0x18000e48, '__codec_tab_hi': 0x18003e28}
+                '__codec_tab_lo': 0x18000e48, '__codec_tab_hi': 0x18003e38}
     if any(symbols.get(name) != value for name, value in expected.items()):
         raise ValueError('Linker layout differs from the reserved codec location')
 
     manifest = {'format': 'open25-dm32-firmware', 'version': 2, 'target': 'dm32-048',
-                'release': release, 'applicationSha256': digest}
+                'release': release, 'applicationSha256': digest, 'codecTablesEnd': symbols['__codec_tab_hi']}
     out.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(out, 'x') as archive:
         archive.writestr(ZipInfo('firmware.json'), json.dumps(manifest, indent=2) + '\n')
