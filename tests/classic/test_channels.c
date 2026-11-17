@@ -157,12 +157,12 @@ int main(void)
     test_delete_tag_boundary();
     fresh();
     channel_t p=make("P25 local", 438500000, 430900000), back;
-    p.mode=RADIO_MODE_P25;p.p25_squelch=1;p.p25_nac=0xABC;p.p25_tg=65535;p.p25_id=9999999;p.power=8;
+    p.mode=RADIO_MODE_P25;p.p25_squelch=1;p.p25_nac=0xABC;p.p25_tg=65535;p.p25_id=9999999;p.power=8;p.scan_skip=true;
     CHECK(codeplug_set_channel(9,&p));
     CHECK(codeplug_init()==CODEPLUG_OPENFW);
     CHECK(codeplug_channel(9,&back));
     CHECK(back.mode==RADIO_MODE_P25 && back.p25_squelch==1 && back.p25_nac==0xABC && back.p25_tg==65535);
-    CHECK(back.p25_id==9999999 && back.power==8 && back.rx_hz==p.rx_hz && back.tx_hz==p.tx_hz);
+    CHECK(back.p25_id==9999999 && back.power==8 && back.scan_skip && back.rx_hz==p.rx_hz && back.tx_hz==p.tx_hz);
     CHECK(!back.roam && !back.dmo && !back.vox);
     uint8_t r[CODEPLUG_OPENFW_CHANNEL_SIZE];memset(r,0xFF,sizeof r);
     codeplug_openfw_encode(&p,r);

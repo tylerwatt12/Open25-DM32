@@ -333,10 +333,15 @@ void ui_draw_splash(const char *board_name, const char *version, const char *lin
 \t\t}'''),
     ])
     transform('core/radio/radio_sm.h', [
+        ('\tscan_t scan;', '\tscan_t scan;\n#if CONFIG_P25_CHANNELS\n\tbool p25_scan_ready;\n#endif'),
         ('void radio_sm_poll(radio_sm_t *sm, uint32_t now_ms);', '''void radio_sm_poll(radio_sm_t *sm, uint32_t now_ms);
 uint8_t radio_sm_tx_check(const radio_sm_t *sm);
 #if CONFIG_P25_CHANNELS
 void radio_sm_native_maintenance(radio_sm_t *sm, uint32_t now_ms);
+#if CONFIG_SCAN
+bool radio_sm_p25_scan_poll(radio_sm_t *sm, bool ready, uint32_t now_ms);
+bool radio_sm_p25_scan_ptt(radio_sm_t *sm, uint32_t now_ms);
+#endif
 #endif'''),
     ])
     transform('core/radio/radio_sm.c', [
@@ -346,9 +351,89 @@ void radio_sm_native_maintenance(radio_sm_t *sm, uint32_t now_ms);
         ('tx_check(sm)', 'radio_sm_tx_check(sm)', 4),
         ('\tcase RREQ_PTT:\n#if CONFIG_FM_TX_TONES', '\tcase RREQ_PTT:\n\t\t/* P25 PTT is handled by the native owner before this state machine. */\n\t\tif (codeplug_mode_p25(sm->view.ch.mode)) break;\n#if CONFIG_FM_TX_TONES'),
         ('case RREQ_MODE:\n\t\tif (busy ||', 'case RREQ_MODE:\n\t\tif (codeplug_mode_p25(sm->view.ch.mode)) break;\n\t\tif (busy ||'),
-        ('codeplug_channel(sm->zone.channels[pos], &ch) && !ch.scan_skip;', 'codeplug_channel(sm->zone.channels[pos], &ch) && !ch.scan_skip && !codeplug_mode_p25(ch.mode);'),
-        ('static void scan_request(radio_sm_t *sm, const radio_req_t *req, uint32_t now_ms)\n{', 'static void scan_request(radio_sm_t *sm, const radio_req_t *req, uint32_t now_ms)\n{\n\t/* P25 currently supports selected-channel receive, not scan dwell. */\n\tif (codeplug_mode_p25(sm->view.ch.mode)) return;'),
-        ('\tcase RSCAN_DUAL: {\n', '\tcase RSCAN_DUAL: {\n\t\tchannel_t other;\n\t\tif (req->arg2 >= sm->zone.count || !codeplug_channel(sm->zone.channels[req->arg2], &other) || codeplug_mode_p25(other.mode)) break;\n'),
+        ('\treturn pos < sm->zone.count && codeplug_channel(sm->zone.channels[pos], &ch) && !ch.scan_skip;', '''\tif (pos >= sm->zone.count || !codeplug_channel(sm->zone.channels[pos], &ch) || ch.scan_skip)
+\t\treturn false;
+#if CONFIG_P25_CHANNELS
+\tif (codeplug_mode_p25(ch.mode))
+\t\treturn board.native_modem && codeplug_p25_valid(&ch) && board_in_band(ch.rx_hz, false);
+#endif
+\treturn true;'''),
+        ('codeplug_channel(z->channels[r->pos], ch) ? z : NULL;', 'codeplug_channel(z->channels[r->pos], ch) && !codeplug_mode_p25(ch->mode) ? z : NULL;'),
+        ('\tscan_tuned(sc, now_ms);\n\tscan_publish(sm);\n\treturn true;\n}\n\nstatic void scan_config', '''#if CONFIG_P25_CHANNELS
+\tsm->p25_scan_ready = false;
+#endif
+\tscan_tuned(sc, now_ms);
+\tscan_publish(sm);
+\treturn true;
+}
+
+static void scan_config'''),
+        ('\tscan_pause(sc, sm->view.monitor, now_ms);', '''#if CONFIG_P25_CHANNELS
+\t/* The native owner supplies P25 activity after the receiver starts. */
+\tif (codeplug_mode_p25(sm->view.ch.mode)) return;
+#endif
+\tscan_pause(sc, sm->view.monitor, now_ms);'''),
+        ('// A scan stop asked for (the debug link):', '''#if CONFIG_P25_CHANNELS
+/* LDU1 repeats every 360 ms. Allow time to find sync and receive its link control. */
+#define P25_SCAN_DWELL_MS 450u
+#define P25_SCAN_START_LIMIT_MS 1500u
+
+bool radio_sm_p25_scan_poll(radio_sm_t *sm, bool ready, uint32_t now_ms)
+{
+\tscan_t *sc = &sm->scan;
+\tif (sc->kind != SCAN_ZONE || !codeplug_mode_p25(sm->view.ch.mode) ||
+\t    sm->ptt || sm->power_off_req || sm->view.power_off) return false;
+\tscan_pause(sc, sm->view.monitor, now_ms);
+\tif (sc->phase == SCAN_PH_PAUSED) {
+\t\tscan_publish(sm);
+\t\treturn false;
+\t}
+\tif (!sm->p25_scan_ready) {
+\t\tif (!ready) return now_ms - sc->tuned_ms >= P25_SCAN_START_LIMIT_MS;
+\t\tsm->p25_scan_ready = true;
+\t\tsc->tuned_ms = now_ms;
+\t}
+\t/* Only decoded audio admitted by this channel's NAC and talkgroup holds the scan. */
+\tbool active = ready && p25_lab_channel_receiving();
+\tuint16_t dwell = sc->cfg.dwell_ms;
+\tif (dwell < P25_SCAN_DWELL_MS) sc->cfg.dwell_ms = P25_SCAN_DWELL_MS;
+\tuint8_t was = sc->phase;
+\tscan_act_t action = scan_poll(sc, now_ms, active, false, false);
+\tsc->cfg.dwell_ms = dwell;
+\tif (action == SCAN_ACT_STOP) scan_stop(sm, false, now_ms);
+\tif (sc->phase == SCAN_PH_HOLD && was != SCAN_PH_HOLD && was != SCAN_PH_RESUME && sm->set.scan_beep)
+\t\tbeep(sm, BEEP_SCAN_HOLD);
+\tscan_publish(sm);
+\treturn action == SCAN_ACT_NEXT;
+}
+
+bool radio_sm_p25_scan_ptt(radio_sm_t *sm, uint32_t now_ms)
+{
+\tif (sm->scan.kind != SCAN_ZONE) return false;
+\tbool searching = sm->scan.phase != SCAN_PH_HOLD && sm->scan.phase != SCAN_PH_RESUME;
+\tscan_stop(sm, false, now_ms);
+\t/* On a searching stop the first press ends scan; a second press can transmit. */
+\treturn searching;
+}
+#endif
+
+// A scan stop asked for (the debug link):'''),
+        ('\t\tscan_stop(sm, !on_signal, now_ms);\n\t}\n#endif', '''\t\tscan_stop(sm, !on_signal, now_ms);
+#if CONFIG_P25_CHANNELS
+\t\t/* Returning to a P25 origin requires a new press through the native owner. */
+\t\tif (codeplug_mode_p25(sm->view.ch.mode)) return;
+#endif
+\t}
+#endif'''),
+        ('\tcase RSCAN_DUAL: {\n', '\tcase RSCAN_DUAL: {\n\t\tif (codeplug_mode_p25(sm->view.ch.mode)) break;\n'),
+        ('\tcase RSCAN_NUISANCE:\n', '''#if CONFIG_P25_CHANNELS
+\tcase RSCAN_P25_NEXT:
+\t\tif (sm->scan.kind == SCAN_ZONE && codeplug_mode_p25(sm->view.ch.mode))
+\t\t\tscan_step(sm, now_ms);
+\t\tbreak;
+#endif
+\tcase RSCAN_NUISANCE:
+'''),
         ('if (ch->mode == RADIO_MODE_DMR ? !CONFIG_VFO_DMR : !CONFIG_VFO_FM)', 'if (codeplug_mode_p25(ch->mode) || (ch->mode == RADIO_MODE_DMR ? !CONFIG_VFO_DMR : !CONFIG_VFO_FM))'),
         ('if (ch->mode == RADIO_MODE_DMR ? !CONFIG_DMR : !CONFIG_FM)', 'if (codeplug_mode_p25(ch->mode) ? !CONFIG_P25_NATIVE : (ch->mode == RADIO_MODE_DMR ? !CONFIG_DMR : !CONFIG_FM))'),
         ('\tif (ch->tx_hz == 0) {', '''#if CONFIG_P25_CHANNELS

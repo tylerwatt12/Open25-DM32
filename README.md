@@ -46,8 +46,12 @@ The tools homepage lists Flasher v3, Classic CPS and Next CPS. Retired Flasher
 v1/v2 choices are removed; their former public entry URLs redirect to
 [Flasher v3](https://kd8zmm.com/open25-dm32/v3/firmware.html).
 
-Classic's P25 operation uses saved channels. P25 scanning, VFO operation, and
-private calls are not available in Classic.
+Classic can scan saved conventional P25 channels alongside FM and DMR using
+**Tools > Scan**. It follows the zone order and each channel's Scan setting.
+A quiet P25 stop gets at least 450 ms after the receiver starts. Scan holds when
+the channel's NAC and talkgroup settings admit decoded voice. While searching
+on a P25 channel, the first PTT press stops scan. Release and press again to
+transmit. Classic P25 uses saved channels and group calls.
 
 Next adds zones and scan lists, receive-only control-channel monitoring, site
 discovery, caller aliases, recent calls, and light/dark display modes.

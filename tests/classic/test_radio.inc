@@ -11,8 +11,8 @@ uint32_t hal_micros(void) { return now*1000u; }
 static bool classic_on(void) { return true; }
 static uint16_t classic_battery(void) { return 8000; }
 int p25_lab_busy(void) { return classic_busy; }
-int p25_lab_set_channel(uint16_t n,uint16_t tx,uint16_t t,uint32_t i)
-{ CHECK(n==0x293 && tx==0x293 && t==42 && i==3101234);return !classic_busy; }
+int p25_lab_set_channel(uint16_t n,uint16_t tx,uint16_t t,uint32_t i,int selective)
+{ (void)selective;CHECK(n==0x293 && tx==0x293 && t==42 && i==3101234);return !classic_busy; }
 void p25_lab_channel_stop(void) { classic_stop=true; }
 int p25_lab_channel_receiving(void) { return classic_receiving; }
 int p25_lab_channel_rx(uint32_t hz)
@@ -167,8 +167,13 @@ static void classic_dispatch(void)
 #include "classic_dispatch.inc"
     classic_request=req;classic_retained=retained_request;
     classic_pump();
-    if(native_lab_owns())radio_sm_native_maintenance(&sm,now);
-    else radio_sm_poll(&sm,now);
+    if(native_lab_owns()) {
+        radio_sm_native_maintenance(&sm,now);
+        if (!classic_retained && native_lab_scan_poll(&sm,now)) {
+            classic_request=(radio_req_t){.type=RREQ_SCAN,.arg=RSCAN_P25_NEXT};
+            classic_retained=true;
+        }
+    } else radio_sm_poll(&sm,now);
 }
 static unsigned classic_saved_edit(uint32_t hz)
 {
@@ -205,9 +210,100 @@ static void test_classic_saved_refresh(void)
     CHECK(!classic_retained && sm.view.zone_index==1 && sm.view.ch.mode==RADIO_MODE_FM);
     CHECK(sm.view.ch.rx_hz==145500000 && hw.rx_hz==145500000);
 }
+static void classic_scan_request(int cmd)
+{
+    CHECK(!classic_retained);
+    classic_request=(radio_req_t){.type=RREQ_SCAN,.arg=cmd};
+    classic_retained=true;
+    for (unsigned i=0;i<6;i++) classic_dispatch();
+    CHECK(!classic_retained);
+}
+
+static void classic_scan_zone(bool mixed)
+{
+    classic_select(false);
+    classic_retained=false;
+    add(2,"P25 first",146550000,RADIO_MODE_P25,false,2);
+    add(3,"P25 skipped",146575000,RADIO_MODE_P25,false,2);
+    add(5,"P25 last",146600000,RADIO_MODE_P25,false,2);
+    const unsigned channels[]={2,3,5};
+    for (unsigned i=0;i<sizeof channels/sizeof channels[0];i++) {
+        channel_t *ch=&chans[channels[i]];
+        ch->bw=RADIO_BW_12K5;
+        ch->p25_nac=0x293;ch->p25_tg=42;ch->p25_id=3101234;
+    }
+    chans[3].scan_skip=true;
+    zones[0].count=mixed ? 5 : 3;
+    zones[0].channels[0]=2;zones[0].channels[1]=3;zones[0].channels[2]=5;
+    zones[0].channels[3]=4;zones[0].channels[4]=1;
+    req(RREQ_ZONE,0);
+    sm.set.scan_dwell_ms=100;
+    sm.set.scan_resume=SCAN_RESUME_CARRIER;
+    sm.set.scan_delay_ms=100;
+    sm.set.scan_priority=false;
+    sm.set.scan_beep=false;
+    classic_dispatch();classic_dispatch();
+    CHECK(sm.view.channel_number==2 && classic_live->state==NT_RX);
+}
+
+static void test_classic_p25_scan(void)
+{
+    classic_scan_zone(false);
+    classic_scan_request(RSCAN_ZONE);
+    CHECK(sm.view.scan==SCAN_ZONE && sm.view.channel_number==5);
+    CHECK(classic_live->state==NT_RX && classic_live->config.frequency_hz==146600000);
+    uint32_t listening=sm.scan.tuned_ms;
+    while (now-listening<400) classic_dispatch();
+    CHECK(sm.view.channel_number==5 && sm.scan.phase==SCAN_PH_LISTEN);
+    classic_receiving=true;
+    for (unsigned i=0;i<40;i++) classic_dispatch();
+    CHECK(sm.view.channel_number==5 && sm.view.scan_phase==SCAN_PH_HOLD);
+    classic_receiving=false;
+    unsigned restores=classic_restores;
+    for (unsigned i=0;i<12;i++) classic_dispatch();
+    CHECK(sm.view.channel_number==2 && classic_live->config.frequency_hz==146550000);
+    CHECK(classic_restores>restores && !hw.tx_calls);
+    classic_scan_request(RSCAN_NUISANCE);
+    CHECK(sm.view.channel_number==5 && sm.view.scan_skipped==1);
+    classic_scan_request(RSCAN_CANCEL);
+    CHECK(sm.view.channel_number==2 && sm.view.scan==SCAN_OFF && classic_live->state==NT_RX);
+
+    classic_scan_request(RSCAN_ZONE);
+    classic_receiving=true;
+    for (unsigned i=0;i<4;i++) classic_dispatch();
+    CHECK(sm.view.scan_phase==SCAN_PH_HOLD);
+    uint32_t held_sid=classic_sid;
+    classic_scan_request(RSCAN_STOP);
+    CHECK(sm.view.scan==SCAN_OFF && sm.view.channel_number==5 && classic_sid==held_sid);
+    CHECK(classic_live->state==NT_RX);
+
+    classic_scan_zone(true);
+    classic_scan_request(RSCAN_TOGGLE);
+    CHECK(sm.view.channel_number==5);
+    for (unsigned i=0;i<40 && sm.view.channel_number!=4;i++) classic_dispatch();
+    CHECK(sm.view.channel_number==4 && sm.view.scan==SCAN_ZONE && !native_lab_owns());
+    for (unsigned i=0;i<40 && sm.view.channel_number!=1;i++) classic_dispatch();
+    CHECK(sm.view.channel_number==1 && sm.view.scan==SCAN_ZONE);
+    for (unsigned i=0;i<40 && sm.view.channel_number!=2;i++) classic_dispatch();
+    classic_dispatch();classic_dispatch();
+    CHECK(sm.view.channel_number==2 && sm.view.scan==SCAN_ZONE && classic_live->state==NT_RX);
+    radio_req_t ptt={.type=RREQ_PTT,.arg=1};
+    CHECK(native_lab_request(&sm,&ptt)==1 && sm.view.scan==SCAN_OFF && !sm.ptt);
+    CHECK(classic_live->state==NT_RX && !hw.tx_calls);
+
+    /* A searching DMR stop may cancel back to the P25 origin. This press
+       must never fall through to the board's FM TX path. */
+    classic_scan_zone(true);
+    classic_scan_request(RSCAN_ZONE);
+    for (unsigned i=0;i<40 && sm.view.channel_number!=4;i++) classic_dispatch();
+    CHECK(sm.view.channel_number==4 && sm.view.scan_phase==SCAN_PH_LISTEN);
+    req(RREQ_PTT,1);
+    CHECK(sm.view.channel_number==2 && sm.view.scan==SCAN_OFF && !sm.ptt && !hw.tx_calls);
+}
+
 int main(void)
 {
-    int prior=upstream_radio_main();test_classic_ownership();test_classic_idle_rearm();test_classic_saved_refresh();
+    int prior=upstream_radio_main();test_classic_ownership();test_classic_idle_rearm();test_classic_saved_refresh();test_classic_p25_scan();
     printf("Classic real FM/DMR/P25 admission and ownership: %d failures\n",failures);
     return prior || failures ? 1 : 0;
 }

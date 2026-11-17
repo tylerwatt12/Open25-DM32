@@ -10,6 +10,9 @@ int native_lab_reserved(void);
  * Hardware capture/lease interrupts remain independent of this task wait. */
 uint32_t native_lab_wait_ms(void);
 int native_lab_owns(void);
+#if CONFIG_P25_CHANNELS && CONFIG_SCAN
+bool native_lab_scan_poll(radio_sm_t *, uint32_t now_ms);
+#endif
 /* On-device P25 worker only. RX fixed bounds, no TX token or persistent writes.
  * The radio task still performs all prepare/restore operations. */
 uint32_t native_lab_voice_start(uint32_t frequency_hz,uint32_t duration_ms);

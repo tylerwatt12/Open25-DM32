@@ -112,6 +112,13 @@ int native_lab_owns(void) {
     taskEXIT_CRITICAL();
     return r;
 }
+#if CONFIG_P25_CHANNELS && CONFIG_SCAN
+bool native_lab_scan_poll(radio_sm_t *sm, uint32_t now_ms)
+{
+    return channel_selected && !channel_handoff && !updater() &&
+           radio_sm_p25_scan_poll(sm, test.state == NT_RX, now_ms);
+}
+#endif
 static int battery_ok(void)
 {
     if (!board.power || !board.power->switch_on || !board.power->switch_on()) return 0;
@@ -250,6 +257,9 @@ int native_lab_request(radio_sm_t *sm, const radio_req_t *r)
             p25_lab_live_up();
             if(live_owner() && test.state==NT_ARMED)nt_stop(&test,test.session,NT_USER_STOP);
         } else if(!sm->ptt) {
+#if CONFIG_SCAN
+            if (radio_sm_p25_scan_ptt(sm, hal_millis())) return 1;
+#endif
             channel_denial=radio_sm_tx_check(sm);
             sm->ptt=true;
             if(!channel_denial) {
@@ -263,6 +273,14 @@ int native_lab_request(radio_sm_t *sm, const radio_req_t *r)
         }
         channel_view(sm);return 1;
     }
+#if CONFIG_SCAN
+    if (channel_selected && !channel_handoff && r->type == RREQ_SCAN &&
+        (r->arg == RSCAN_STOP || (r->arg == RSCAN_TOGGLE && sm->scan.kind == SCAN_ZONE))) {
+        /* Keep the current decoder running when ending the scan on this channel. */
+        radio_sm_request(sm, r, hal_millis());
+        return 1;
+    }
+#endif
     if(channel_selected || channel_handoff) {
         if(r->type==RREQ_POWER_OFF) {
             sm->ptt=false;channel_denial=0;p25_lab_live_up();

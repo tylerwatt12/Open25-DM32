@@ -317,7 +317,8 @@ def prepare():
     ])
     # FIFO scheduling/queue fix from RadioFoundry RX audio PR #660 (MIT).
     transform("platform/hrc7000/platform.h", [
-        ('#define TIMER_BOARD', '#define TIMER_PCM\t\t6\t// speaker refill independent of block callbacks\n#define TIMER_BOARD'),
+        # The DM32 has no board burst timer. Timer 6 belongs to the native modem guard.
+        ('#define TIMER_BOARD', '#define TIMER_PCM\t\t5\t// DM32 speaker refill\n#define IRQ_TIMER_PCM\t\tIRQ_TIMER5\n#define TIMER_BOARD'),
     ])
     transform("platform/hrc7000/audio_pcm.c", [
         ('// the task pushes the queue to the prompt FIFO, 32 samples at a time while b31 says there is room, as stock does. The', '// a 2 ms timer pushes the queue to the prompt FIFO, 32 samples at a time while b31 says there is room. The'),
@@ -329,7 +330,7 @@ def prepare():
         ('\t\tgate_check();\n\t\tfifo_feed();', '\t\tgate_check();'),
         ('\t\tif (next == spk_tail) {\n\t\t\tstatic int16_t discard[AUDIO_BLOCK_SAMPLES];\n\t\t\tcb(mic, discard, block_ctx);\t// the speaker side is full (PCM not routed): keep the mic side going\n\t\t} else {\n\t\t\tint16_t *q = spk_q[spk_head];\n\t\t\tuint8_t gen = spk_gen;\n\t\t\tcb(mic, q, block_ctx);\n\t\t\tbool loud = false;\n\t\t\tfor (uint32_t i = 0; i < AUDIO_BLOCK_SAMPLES && !loud; i++) {\n\t\t\t\tloud = q[i] != 0;\n\t\t\t}\n\t\t\t// A gate edge emptied the queue during cb() (another task): this block is as stale as the rest\n\t\t\ts = hrc_irq_save();\n\t\t\tif (gen == spk_gen) {\n\t\t\t\tspk_loud[spk_head] = loud;\n\t\t\t\tspk_head = next;\n\t\t\t}\n\t\t\thrc_irq_restore(s);\n\t\t}', '\t\t// The reserved head slot is safe to fill even when the queue is full.\n\t\tint16_t *q = spk_q[spk_head];\n\t\tuint8_t gen = spk_gen;\n\t\tcb(mic, q, block_ctx);\n\t\tbool loud = false;\n\t\tfor (uint32_t i = 0; i < AUDIO_BLOCK_SAMPLES && !loud; i++) {\n\t\t\tloud = q[i] != 0;\n\t\t}\n\t\t// The timer may have freed space during cb(); a gate edge makes this block stale.\n\t\ts = hrc_irq_save();\n\t\tif (gen == spk_gen && next != spk_tail) {\n\t\t\tspk_loud[spk_head] = loud;\n\t\t\tspk_head = next;\n\t\t}\n#if CONFIG_P25\n\t\telse play_diag[gen == spk_gen ? 8 : 9]++;\n#endif\n\t\thrc_irq_restore(s);'),
         ('\t\tblocks++;\n\t\tfifo_feed();', '\t\tblocks++;'),
-        ('\t\thrc_irq_register(IRQ_PCM_WR, isr_pcm_wr);', '\t\thrc_irq_register(IRQ_PCM_WR, isr_pcm_wr);\n\t\thrc_irq_register(IRQ_TIMER6, fifo_tick);\n\t\thrc_irq_enable(IRQ_TIMER6, true);'),
+        ('\t\thrc_irq_register(IRQ_PCM_WR, isr_pcm_wr);', '\t\thrc_irq_register(IRQ_PCM_WR, isr_pcm_wr);\n\t\thrc_irq_register(IRQ_TIMER_PCM, fifo_tick);\n\t\thrc_irq_enable(IRQ_TIMER_PCM, true);'),
         ('\tblock_ctx = ctx;', '\tuint32_t irq = hrc_irq_save();\n\tblock_ctx = ctx;'),
         ('\thrc7000_audio_bits(modem, C7_AUDIO_PCM_MIC, 0);\t// under the lock set at attach', '\thrc7000_audio_bits(modem, C7_AUDIO_PCM_MIC, 0);\t// under the lock set at attach\n\thrc_timer_periodic(TIMER_PCM, 2000u);\n\thrc_irq_restore(irq);'),
         ('\trunning = false;', '\trunning = false;\n\thrc_timer_stop(TIMER_PCM);'),
@@ -411,13 +412,16 @@ def prepare():
         ('\t\traw_keys = keys;', '\t\traw_keys = keys;\n#if CONFIG_DEV_TX\n\t\tconst keymap_entry_t *ptt = keys && !ptt_blocked ? key_for(ACT_PTT, false) : NULL;\n\t\tbool physical_down = ptt && (keys & (1u << ptt->bit));\n\t\tif (physical_down != physical_ptt) {\n\t\t\tphysical_ptt = physical_down;\n\t\t\tradio_req_physical_ptt(physical_down);\n\t\t}\n#endif'),
     ])
     transform("core/input/input.h", [("uint32_t input_raw_keys(void);", "uint32_t input_raw_keys(void);\n#if CONFIG_DEV_TX\nbool input_physical_ptt(void);\nbool input_ptt_down(void);\n#endif")])
-    transform("core/radio/radio.h", [("void radio_req_ptt(bool down);", "void radio_req_ptt(bool down);\n#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down);\n#endif")])
+    transform("core/radio/radio.h", [
+        ("RSCAN_NUISANCE, RSCAN_TOGGLE }", "RSCAN_NUISANCE, RSCAN_TOGGLE,\n#if CONFIG_P25_CHANNELS && CONFIG_SCAN\n    RSCAN_P25_NEXT, // internal, after the native receiver releases RF\n#endif\n}"),
+        ("void radio_req_ptt(bool down);", "void radio_req_ptt(bool down);\n#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down);\n#endif"),
+    ])
     transform("core/radio/radio_task.c", [
         ('#include "config.h"', '#include "config.h"\n#if CONFIG_P25_NATIVE\n#include "native_modem/native_lab.h"\n#endif'),
         ('for (;;) {\n\t\tTickType_t due', 'radio_req_t req;\n    bool retained_request=false;\n\tfor (;;) {\n#if CONFIG_P25_NATIVE\n#if CONFIG_P25_CHANNELS\n        /* Saved edits use the existing retained receiver handoff. */\n        if (!retained_request && !sm.ptt && sm.view.state!=RS_TX &&\n            native_lab_owns() && codeplug_serial()!=sm.codeplug_serial) {\n            req=(radio_req_t){.type=RREQ_RELOAD};\n            retained_request=true;\n        }\n#endif\n\t\tnative_lab_service(&sm,hal_micros());\n#endif\n\t\tTickType_t due'),
         ('radio_req_t req;\n\t\tif (xQueueReceive(requests, &req, left > 0 ? (TickType_t)left : 0) == pdTRUE) {', '#if CONFIG_P25_NATIVE\n\t\tint32_t native_wait=(int32_t)native_lab_wait_ms();\n\t\tif (native_wait && left>native_wait) left=native_wait;\n#endif\n        if (retained_request || xQueueReceive(requests,&req,left>0?(TickType_t)left:0)==pdTRUE) {\n            retained_request=false;'),
         ('req_handled++;', 'req_handled++;\n#if CONFIG_P25_NATIVE\n                int handled=native_lab_request(&sm,&req);\n                if(handled==NATIVE_REQUEST_WAIT){retained_request=true;vTaskDelay(1);break;}\n                if(handled)continue;\n#endif'),
-        ('TickType_t now = xTaskGetTickCount();', 'TickType_t now = xTaskGetTickCount();\n#if CONFIG_P25_NATIVE\n\t\tif (native_lab_owns()) {\n            next_tick=now+tick_period;\n#if CONFIG_P25_CHANNELS\n            if((int32_t)(now-next_poll)>=0){\n                radio_sm_native_maintenance(&sm,hal_millis());\n                next_poll=now+period;\n            }\n#else\n            next_poll=now+period;\n#endif\n            publish();continue;\n        }\n#endif'),
+        ('TickType_t now = xTaskGetTickCount();', 'TickType_t now = xTaskGetTickCount();\n#if CONFIG_P25_NATIVE\n\t\tif (native_lab_owns()) {\n            next_tick=now+tick_period;\n#if CONFIG_P25_CHANNELS\n            if((int32_t)(now-next_poll)>=0){\n                uint32_t now_ms=hal_millis();\n                radio_sm_native_maintenance(&sm,now_ms);\n#if CONFIG_SCAN\n                if (!retained_request && native_lab_scan_poll(&sm,now_ms)) {\n                    req=(radio_req_t){.type=RREQ_SCAN,.arg=RSCAN_P25_NEXT};\n                    retained_request=true;\n                }\n#endif\n                next_poll=now+period;\n            }\n#else\n            next_poll=now+period;\n#endif\n            publish();continue;\n        }\n#endif'),
         ('radio_sm_init(&sm, hal_millis());', 'radio_sm_init(&sm, hal_millis());\n#if CONFIG_P25_NATIVE\n\tnative_lab_init();\n#endif'),
         ('void radio_req_ptt(bool down)', '#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down)\n{ post(RREQ_PTT, down ? NATIVE_PHYSICAL_PTT_DOWN : NATIVE_PHYSICAL_PTT_UP, pdMS_TO_TICKS(50)); }\n#endif\nvoid radio_req_ptt(bool down)'),
     ])
