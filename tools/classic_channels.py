@@ -231,7 +231,10 @@ void radio_sm_native_maintenance(radio_sm_t *sm, uint32_t now_ms);
 #endif
 \tif (ch->tx_hz == 0) {'''),
         ('\tif (!board_in_band(ch->tx_hz, true)) {', '''\tif (!board_in_band(ch->tx_hz, true)
-#if CONFIG_P25_CHANNELS
+#if CONFIG_DM32_QUAD_BAND
+\t    || !dm32_quad_band_frequency(ch->tx_hz)
+\t    || (ch->mode == RADIO_MODE_DMR && !dm32_stock_tx_band(ch->tx_hz))
+#elif CONFIG_P25_CHANNELS
 \t    || (codeplug_mode_p25(ch->mode) &&
 \t        !((ch->tx_hz > 144000000u && ch->tx_hz < 148000000u) ||
 \t          (ch->tx_hz > 420000000u && ch->tx_hz < 450000000u)))

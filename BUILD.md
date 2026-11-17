@@ -100,3 +100,35 @@ Legacy development flags remain available for regression work. `--first-boot`
 blocks ordinary TX/writes; `--tx-bench` additionally requires `--dev-update` and
 uses fixed bench settings. Neither is the Classic release preset, and those
 flags cannot be combined with `--classic`.
+
+
+## Experimental quad-band Classic firmware
+
+Build with the standard Classic prerequisites above and enable the extra
+tuning ranges explicitly.
+
+```sh
+python3 tools/build_radiofoundry.py --classic --quad-band --stack-check
+```
+
+FM and conventional P25 accept these inclusive frequencies:
+
+| Band | Tuning range (MHz) |
+| --- | --- |
+| VHF | 136�174 |
+| UHF | 380�520 |
+| 700 | 764�776, 794�805 |
+| 800 | 806�825, 851�870 |
+
+The firmware accepts the contiguous interval from 794 through 825 MHz.
+Extended-band transmit uses the lowest calibrated UHF drive setting. The
+normal Classic build retains its existing limits. DMR transmit retains the
+stock DM-32UV VHF and UHF limits in the quad-band build as well.
+
+Use saved FM or conventional P25 channels with the intended RX and TX
+frequencies. Establish a low-power baseline through a dummy load or
+conducted test setup, then measure carrier frequency, deviation or digital
+modulation, output power, and spectral purity at each band edge before
+treating the extended bands as usable. The extended limits come from the
+APX 8000 frequency plan. They describe firmware tuning, with DM-32UV RF
+performance still to be qualified. [Motorola APX 8000 data sheet](https://www.motorolasolutions.com/content/dam/msi/docs/en-xl/mot_apx_8000_datasheet_en.pdf)

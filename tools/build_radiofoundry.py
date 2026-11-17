@@ -59,6 +59,14 @@ def transform(relative, replacements):
     write_owned(DEST / relative, content.encode(), original)
 
 
+# APX 8000 band limits, with adjacent splits combined (Hz).
+QUAD_BANDS = ((136000000, 174000000), (380000000, 520000000),
+              (764000000, 776000000), (794000000, 825000000),
+              (851000000, 870000000))
+QUAD_PREDICATE = " ||\n           ".join(f"(hz >= {lo}u && hz <= {hi}u)" for lo, hi in QUAD_BANDS)
+QUAD_BOARD_BANDS = "\n".join(f"\t{{ {lo}, {hi}, true }}," for lo, hi in QUAD_BANDS)
+
+
 def prepare():
     sources.verify_vendored()
     if not UP.exists():
@@ -88,7 +96,7 @@ def prepare():
         ('# Dependencies\n', 'CONFIG_P25 ?= n\nCONFIG_P25_NATIVE ?= n\nCONFIG_FIRSTBOOT ?= n\nCONFIG_P25_BENCH ?= y\nCONFIG_CPU_PROFILE ?= n\nCONFIG_DEV_UPDATE ?= n\nCONFIG_DEV_TX ?= n\nCONFIG_P25_CHANNELS ?= n\nFEATURES += P25 P25_NATIVE FIRSTBOOT P25_BENCH CPU_PROFILE DEV_UPDATE DEV_TX P25_CHANNELS\nifeq ($(CONFIG_DEV_TX),y)\nifneq ($(CONFIG_P25_NATIVE),y)\n$(error DEV_TX requires P25_NATIVE=y)\nendif\nendif\nifeq ($(CONFIG_DEV_UPDATE),y)\nifneq ($(CONFIG_FIRSTBOOT)$(CONFIG_STUB_ENTRY),yy)\n$(error DEV_UPDATE requires FIRSTBOOT=y STUB_ENTRY=y)\nendif\nendif\nifeq ($(CONFIG_FIRSTBOOT),y)\nifneq ($(CONFIG_CPS_OPENFW)$(CONFIG_CPS_FAST),nn)\n$(error FIRSTBOOT requires CPS_OPENFW=n CPS_FAST=n)\nendif\nifneq ($(CONFIG_STUB_ENTRY),$(CONFIG_DEV_UPDATE))\n$(error FIRSTBOOT requires STUB_ENTRY to match DEV_UPDATE)\nendif\nendif\nifeq ($(CONFIG_P25_NATIVE),y)\nifneq ($(CONFIG_P25)$(CONFIG_DMR),yy)\n$(error P25_NATIVE needs P25=y and DMR=y)\nendif\nendif\n\n# Dependencies\n'),
     ])
     transform("core/config.h", [
-        ('#define RFOUNDRY_CONFIG_H\n', '#define RFOUNDRY_CONFIG_H\n#ifndef CONFIG_P25_CHANNELS\n#define CONFIG_P25_CHANNELS 0\n#endif\n#ifndef CONFIG_P25\n#define CONFIG_P25 0\n#endif\n#ifndef CONFIG_P25_NATIVE\n#define CONFIG_P25_NATIVE 0\n#endif\n#ifndef CONFIG_P25_BENCH\n#define CONFIG_P25_BENCH 1\n#endif\n#ifndef CONFIG_DEV_UPDATE\n#define CONFIG_DEV_UPDATE 0\n#endif\n#ifndef CONFIG_DEV_TX\n#define CONFIG_DEV_TX 0\n#endif\n#ifndef CONFIG_CPU_PROFILE\n#define CONFIG_CPU_PROFILE 0\n#endif\n#ifndef CONFIG_FIRSTBOOT\n#define CONFIG_FIRSTBOOT 0\n#endif\n#if CONFIG_FIRSTBOOT\n#include "firstboot/firstboot.h"\n#endif\n'),
+        ('#define RFOUNDRY_CONFIG_H\n', '#define RFOUNDRY_CONFIG_H\n#ifndef CONFIG_DM32_QUAD_BAND\n#define CONFIG_DM32_QUAD_BAND 0\n#endif\n#if CONFIG_DM32_QUAD_BAND\nstatic inline int dm32_quad_band_frequency(unsigned long hz)\n{\n    return ' + QUAD_PREDICATE + ';\n}\nstatic inline int dm32_stock_tx_band(unsigned long hz)\n{\n    return (hz >= 136000000u && hz <= 174000000u) || (hz >= 400000000u && hz <= 480000000u);\n}\n#endif\n#ifndef CONFIG_P25_CHANNELS\n#define CONFIG_P25_CHANNELS 0\n#endif\n#ifndef CONFIG_P25\n#define CONFIG_P25 0\n#endif\n#ifndef CONFIG_P25_NATIVE\n#define CONFIG_P25_NATIVE 0\n#endif\n#ifndef CONFIG_P25_BENCH\n#define CONFIG_P25_BENCH 1\n#endif\n#ifndef CONFIG_DEV_UPDATE\n#define CONFIG_DEV_UPDATE 0\n#endif\n#ifndef CONFIG_DEV_TX\n#define CONFIG_DEV_TX 0\n#endif\n#ifndef CONFIG_CPU_PROFILE\n#define CONFIG_CPU_PROFILE 0\n#endif\n#ifndef CONFIG_FIRSTBOOT\n#define CONFIG_FIRSTBOOT 0\n#endif\n#if CONFIG_FIRSTBOOT\n#include "firstboot/firstboot.h"\n#endif\n'),
     ])
     transform("Makefile", [
         ("APP_DIRS := $(CORE_DIRS)", "ifeq ($(CONFIG_P25),y)\nCORE_DIRS += core/p25 core/p25/cai\nP25_LIB := core/p25/libdm32_imbe.a\nendif\nifeq ($(CONFIG_P25_NATIVE),y)\nCORE_DIRS += core/native_modem\nendif\nifeq ($(CONFIG_FIRSTBOOT),y)\nCORE_DIRS += core/firstboot\nendif\nAPP_DIRS := $(CORE_DIRS)"),
@@ -140,6 +148,9 @@ def prepare():
     ])
     write_owned(DEST / "platform/hrc7000/pcm_playback.inc", (ROOT / "integration/radiofoundry/pcm_playback.inc").read_bytes())
     transform("boards/dm32/board.c", [
+        ('\t{ 136000000, 174000000, true },\n\t{ 400000000, 480000000, true },',
+         '#if CONFIG_DM32_QUAD_BAND\n' + QUAD_BOARD_BANDS +
+         '\n#else\n\t{ 136000000, 174000000, true },\n\t{ 400000000, 480000000, true },\n#endif'),
         ('const board_t board = {', '#if CONFIG_P25_CHANNELS\nstatic uint32_t dm32_cps_type(void) { return 11; }\nstatic const hal_cps_t dm32_cps = { .radio_type = dm32_cps_type };\n#endif\nconst board_t board = {'),
         ('\t.system = &hrc_system,', '\t.system = &hrc_system,\n#if CONFIG_P25_CHANNELS\n\t.cps = &dm32_cps,\n#endif'),
         ('.radio = &dm32_radio,', '.radio = &dm32_radio,\n#if CONFIG_P25_NATIVE\n\t.native_modem = &dm32_native_ops,\n#endif\n#if CONFIG_DEV_TX\n\t.native_mic_route = dm32_native_mic_route,\n#endif'),
@@ -149,6 +160,8 @@ def prepare():
     ])
     transform("boards/dm32/dm32.h", [("#include <stdbool.h>", "#include <stdbool.h>\n#if CONFIG_P25_NATIVE\n#include \"native_test.h\"\nextern nt_ops dm32_native_ops;\n#endif\n#if CONFIG_DEV_TX\nvoid dm32_native_mic_route(bool on);\n#endif")])
     transform("boards/dm32/radio_dm32.c", [
+        ('\ttx_drive = bf_cal_power_level(hz, power);', '#if CONFIG_DM32_QUAD_BAND\n\t/* Extended-band operation uses the lowest calibrated UHF drive. */\n\tbool stock = dm32_stock_tx_band(hz);\n\ttx_drive = bf_cal_power_level(stock ? hz : 450000000u, stock ? power : 0);\n#else\n\ttx_drive = bf_cal_power_level(hz, power);\n#endif'),
+        ('static void tx_off(void)', '#if CONFIG_DM32_QUAD_BAND\nstatic bool tx(uint32_t hz, radio_bw_t bw, uint8_t power,\n               const subtone_t *tone)\n{\n\tif (!dm32_stock_tx_band(hz) && (mode == RADIO_MODE_DMR || !bf_cal_valid()))\n\t\treturn false;\n\treturn tx_prepare(hz, bw, power, tone);\n}\n#endif\n\nstatic void tx_off(void)'),
         # Own the microphone route before any preemptible TX setup writes.
         ('\thrc_dac_b_power(true);\n\tif (mode == RADIO_MODE_DMR) {',
          '\thrc_dac_b_power(true);\n\ttransmitting = true;\n\tif (mode == RADIO_MODE_DMR) {'),
@@ -158,7 +171,7 @@ def prepare():
          '\t\tif (on) {\n#if !CONFIG_P25\n\t\t\tamp(AMP_PCM, true);\n#endif\n\t\t}\n\t}\n#if CONFIG_P25\n\tif (on) amp(AMP_PCM, hrc_audio_pcm_amp_wanted());\n#endif\n\thrc_irq_restore(s);'),
         ("static void pa_key(void)\n{", "static void pa_key(void)\n{\n#if CONFIG_FIRSTBOOT\n\tif (!firstboot_tx_allowed(FB_PA_KEY)) { firstboot_deny(FB_PA_KEY); board_rf_safe(); return; }\n#endif"),
         ("static void dmr_rf_switch(bool tx)\n{", "static void dmr_rf_switch(bool tx)\n{\n#if CONFIG_FIRSTBOOT\n\tif (tx && !firstboot_tx_allowed(FB_RF_SWITCH)) { firstboot_deny(FB_RF_SWITCH); board_rf_safe(); return; }\n#endif"),
-        ("static bool tx(uint32_t hz, radio_bw_t bw, uint8_t power, const subtone_t *tone)\n{", "static bool tx(uint32_t hz, radio_bw_t bw, uint8_t power, const subtone_t *tone)\n{\n#if CONFIG_FIRSTBOOT\n\tif (!firstboot_tx_allowed(FB_BOARD_TX) || hz!=145500000u || bw!=RADIO_BW_12K5 || power!=0 || mode!=RADIO_MODE_DMR) { firstboot_deny(FB_BOARD_TX); board_rf_safe(); return false; }\n#endif"),
+        ("static bool tx(uint32_t hz, radio_bw_t bw, uint8_t power, const subtone_t *tone)\n{", "#if !CONFIG_DM32_QUAD_BAND\n#define tx_prepare tx\n#endif\nstatic bool tx_prepare(uint32_t hz, radio_bw_t bw, uint8_t power, const subtone_t *tone)\n{\n#if CONFIG_FIRSTBOOT\n\tif (!firstboot_tx_allowed(FB_BOARD_TX) || hz!=145500000u || bw!=RADIO_BW_12K5 || power!=0 || mode!=RADIO_MODE_DMR) { firstboot_deny(FB_BOARD_TX); board_rf_safe(); return false; }\n#endif"),
         ("static void init(void)", "#if CONFIG_P25_NATIVE\nstatic void native_init(void);\n#endif\nstatic void init(void)"),
         ("hrc_fm_rx_attach(&modem);", "hrc_fm_rx_attach(&modem);\n#if CONFIG_P25_NATIVE\n\tnative_init();\n#endif"),
     ])
@@ -332,7 +345,10 @@ def main():
     ap.add_argument("--reuse-codec", action="store_true", help="reuse codec only when inputs/compiler/archive/call graphs match checked hashes")
     ap.add_argument("--tx-bench",action="store_true",help="bounded native TX on 145.500 MHz; retains ordinary PTT/storage guards")
     ap.add_argument('--classic', action='store_true', help='Classic FM/DMR/conventional P25 release preset')
+    ap.add_argument('--quad-band', action='store_true', help='Enable experimental quad-band FM and P25 for Classic')
     args = ap.parse_args()
+    if args.quad_band and not args.classic:
+        ap.error('--quad-band requires --classic')
     if args.classic:
         if args.first_boot or args.disable or args.disable_native or args.dev_update or args.tx_bench:
             ap.error('Classic is a separate normal-operation preset')
@@ -367,6 +383,9 @@ def main():
     if args.classic:
         suffix='classic'
         identity='classic-0.1.0-rc1-r8'
+        if args.quad_band:
+            suffix += '-quad-band'
+            identity += '-quad-band'
     b = f"build/dm32-p25-{suffix}"
     command = ["make", "-j8", "BOARD=dm32", f"CROSS={ROOT}/toolchain/bin/csky-elf-", f"BUILD={b}",
         "CONFIG_P25=" + ("n" if args.disable else "y"), "CONFIG_P25_NATIVE="+("y" if native else "n"), "CONFIG_DMR_IP_GATEWAY=n", "CONFIG_NET_PPP=n",
@@ -380,7 +399,8 @@ def main():
         "CONFIG_DEV_TX="+("y" if args.tx_bench or args.classic else "n"),
         "CONFIG_P25_CHANNELS="+("y" if args.classic else "n"),
         f"OPT=-Os -ffile-prefix-map={DEST}=/radiofoundry -fdebug-prefix-map={DEST}=/radiofoundry "
-        f"-DRFOUNDRY_SOURCE_EPOCH={git(UP, 'show', '-s', '--format=%ct', 'HEAD')}"]
+        f"-DRFOUNDRY_SOURCE_EPOCH={git(UP, 'show', '-s', '--format=%ct', 'HEAD')} "
+        f"-DCONFIG_DM32_QUAD_BAND={int(args.quad_band)}"]
     if args.classic:
         command += ['CONFIG_FM=y','CONFIG_DMR=y','CONFIG_CHANNEL_EDIT=y','CONFIG_CPS_OPENFW=y',
                     'CONFIG_CPS_FAST=y','CONFIG_STUB_ENTRY=y','CONFIG_DEBUGLINK=y',
@@ -487,7 +507,7 @@ def main():
         "audits": {"unresolved_symbols": [], "high_register_instructions": 0, "compiler_warnings": 0,**firstboot_audits},
         "forced_rebuild_identical": args.verify_rebuild,
         "codec_speed_build":args.speed_codec, "bench_enabled":not args.lean, "cpu_profile_enabled":args.cpu_profile, "dev_update_enabled":args.dev_update,
-        "native_tx_bench_enabled":args.tx_bench, "classic_enabled":args.classic,
+        "native_tx_bench_enabled":args.tx_bench, "classic_enabled":args.classic, "quad_band_enabled":args.quad_band,
         "firstboot_flags":47 if args.tx_bench else 15 if args.dev_update else 31,
         "codec_slot": "recognized local stock merged separately" if args.with_local_stock else "reserved; no stock AMBE merged",
         "sources": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(inputs)},
