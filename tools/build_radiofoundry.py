@@ -317,7 +317,8 @@ def prepare():
     ])
     # FIFO scheduling/queue fix from RadioFoundry RX audio PR #660 (MIT).
     transform("platform/hrc7000/platform.h", [
-        ('#define TIMER_BOARD', '#define TIMER_PCM\t\t6\t// speaker refill independent of block callbacks\n#define TIMER_BOARD'),
+        # The DM32 has no board burst timer. Timer 6 belongs to the native modem guard.
+        ('#define TIMER_BOARD', '#define TIMER_PCM\t\t5\t// DM32 speaker refill\n#define IRQ_TIMER_PCM\t\tIRQ_TIMER5\n#define TIMER_BOARD'),
     ])
     transform("platform/hrc7000/audio_pcm.c", [
         ('// the task pushes the queue to the prompt FIFO, 32 samples at a time while b31 says there is room, as stock does. The', '// a 2 ms timer pushes the queue to the prompt FIFO, 32 samples at a time while b31 says there is room. The'),
@@ -329,7 +330,7 @@ def prepare():
         ('\t\tgate_check();\n\t\tfifo_feed();', '\t\tgate_check();'),
         ('\t\tif (next == spk_tail) {\n\t\t\tstatic int16_t discard[AUDIO_BLOCK_SAMPLES];\n\t\t\tcb(mic, discard, block_ctx);\t// the speaker side is full (PCM not routed): keep the mic side going\n\t\t} else {\n\t\t\tint16_t *q = spk_q[spk_head];\n\t\t\tuint8_t gen = spk_gen;\n\t\t\tcb(mic, q, block_ctx);\n\t\t\tbool loud = false;\n\t\t\tfor (uint32_t i = 0; i < AUDIO_BLOCK_SAMPLES && !loud; i++) {\n\t\t\t\tloud = q[i] != 0;\n\t\t\t}\n\t\t\t// A gate edge emptied the queue during cb() (another task): this block is as stale as the rest\n\t\t\ts = hrc_irq_save();\n\t\t\tif (gen == spk_gen) {\n\t\t\t\tspk_loud[spk_head] = loud;\n\t\t\t\tspk_head = next;\n\t\t\t}\n\t\t\thrc_irq_restore(s);\n\t\t}', '\t\t// The reserved head slot is safe to fill even when the queue is full.\n\t\tint16_t *q = spk_q[spk_head];\n\t\tuint8_t gen = spk_gen;\n\t\tcb(mic, q, block_ctx);\n\t\tbool loud = false;\n\t\tfor (uint32_t i = 0; i < AUDIO_BLOCK_SAMPLES && !loud; i++) {\n\t\t\tloud = q[i] != 0;\n\t\t}\n\t\t// The timer may have freed space during cb(); a gate edge makes this block stale.\n\t\ts = hrc_irq_save();\n\t\tif (gen == spk_gen && next != spk_tail) {\n\t\t\tspk_loud[spk_head] = loud;\n\t\t\tspk_head = next;\n\t\t}\n#if CONFIG_P25\n\t\telse play_diag[gen == spk_gen ? 8 : 9]++;\n#endif\n\t\thrc_irq_restore(s);'),
         ('\t\tblocks++;\n\t\tfifo_feed();', '\t\tblocks++;'),
-        ('\t\thrc_irq_register(IRQ_PCM_WR, isr_pcm_wr);', '\t\thrc_irq_register(IRQ_PCM_WR, isr_pcm_wr);\n\t\thrc_irq_register(IRQ_TIMER6, fifo_tick);\n\t\thrc_irq_enable(IRQ_TIMER6, true);'),
+        ('\t\thrc_irq_register(IRQ_PCM_WR, isr_pcm_wr);', '\t\thrc_irq_register(IRQ_PCM_WR, isr_pcm_wr);\n\t\thrc_irq_register(IRQ_TIMER_PCM, fifo_tick);\n\t\thrc_irq_enable(IRQ_TIMER_PCM, true);'),
         ('\tblock_ctx = ctx;', '\tuint32_t irq = hrc_irq_save();\n\tblock_ctx = ctx;'),
         ('\thrc7000_audio_bits(modem, C7_AUDIO_PCM_MIC, 0);\t// under the lock set at attach', '\thrc7000_audio_bits(modem, C7_AUDIO_PCM_MIC, 0);\t// under the lock set at attach\n\thrc_timer_periodic(TIMER_PCM, 2000u);\n\thrc_irq_restore(irq);'),
         ('\trunning = false;', '\trunning = false;\n\thrc_timer_stop(TIMER_PCM);'),

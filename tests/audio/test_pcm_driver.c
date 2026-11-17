@@ -5,8 +5,8 @@
 #define pdFALSE 0
 #define portYIELD_FROM_ISR(x) ((void)(x))
 #define IRQ_PCM_WR 28
-#define IRQ_TIMER6 6
-#define TIMER_PCM 6
+#define IRQ_TIMER_PCM 5
+#define TIMER_PCM 5
 #include <setjmp.h>
 #include <assert.h>
 #include <stdio.h>
@@ -25,7 +25,7 @@ static uint32_t hrc_micros(void) { return now_us; }
 static uint32_t hrc_irq_save(void) { return 0; }
 static void hrc_irq_restore(uint32_t s) { (void)s; }
 static void hrc_irq_enable(unsigned irq,bool on) { (void)irq;(void)on; }
-static void hrc_irq_register(unsigned irq,void (*fn)(void)) { if(irq==IRQ_TIMER6)timer_isr=fn; }
+static void hrc_irq_register(unsigned irq,void (*fn)(void)) { if(irq==IRQ_TIMER_PCM)timer_isr=fn; }
 static void hrc_barrier(void) { }
 static bool hrc_dmr_tx_active(void) { return false; }
 static bool tone_active;
