@@ -13,6 +13,18 @@ def prepare(transform):
         ('s->brightness = 100;', 's->brightness = 100;\n\ts->theme = 1; // Classic defaults to dark text on white.'),
     ])
     transform('tests/host/fd6818Test.c', [
+        ('\tCHECK(chip.n == 2 && chip.log[0].reg == 0x07 && chip.log[0].val == 1827 && chip.log[1].val == 0x9045);', '''\tCHECK(chip.n == 2 && chip.log[0].reg == 0x07 && chip.log[0].val == 1827 && chip.log[1].val == 0x9045);
+\t// Classic programs the RF chip's TX PL before preparing and keying FM.
+\tfd6818_fm_tx_prepare(&dev);
+\tfd6818_set_bandwidth(&dev, FD6818_BW_FM_12K5);
+\tfd6818_set_state(&dev, FD6818_STATE_TX);
+\tCHECK(chip.regs[FD6818_REG_CTCSS_FREQ] == 1827 && chip.regs[FD6818_REG_SUBAUDIO] == 0x9045);
+\t// Returning to receive restores the channel's separate RX tone.
+\tfd6818_set_rx_tone(&dev, FD6818_TONE_CTCSS, 1000);
+\tfd6818_set_state(&dev, FD6818_STATE_RX);
+\tCHECK(chip.regs[FD6818_REG_CTCSS_FREQ] == 0x21CE && chip.regs[FD6818_REG_SUBAUDIO] == 0x9045);
+\tfd6818_set_rx_tone(&dev, FD6818_TONE_NONE, 0);
+\tCHECK(chip.regs[FD6818_REG_SUBAUDIO] == 0);'''),
         ('static void test_rx_tones(void)', '''static void test_tone_to_dmr(void)
 {
 \tconst fd6818_tone_t tones[] = { FD6818_TONE_CTCSS, FD6818_TONE_DCS, FD6818_TONE_DCS_INV };

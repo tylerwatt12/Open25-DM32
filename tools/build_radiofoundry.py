@@ -349,6 +349,22 @@ def prepare():
         ("static void pa_key(void)\n{", "static void pa_key(void)\n{\n#if CONFIG_FIRSTBOOT\n\tif (!firstboot_tx_allowed(FB_PA_KEY)) { firstboot_deny(FB_PA_KEY); board_rf_safe(); return; }\n#endif"),
         ("static void dmr_rf_switch(bool tx)\n{", "static void dmr_rf_switch(bool tx)\n{\n#if CONFIG_FIRSTBOOT\n\tif (tx && !firstboot_tx_allowed(FB_RF_SWITCH)) { firstboot_deny(FB_RF_SWITCH); board_rf_safe(); return; }\n#endif"),
         ("static bool tx(uint32_t hz, radio_bw_t bw, uint8_t power, const subtone_t *tone)\n{", "static bool tx(uint32_t hz, radio_bw_t bw, uint8_t power, const subtone_t *tone)\n{\n#if CONFIG_FIRSTBOOT\n\tif (!firstboot_tx_allowed(FB_BOARD_TX) || hz!=145500000u || bw!=RADIO_BW_12K5 || power!=0 || mode!=RADIO_MODE_DMR) { firstboot_deny(FB_BOARD_TX); board_rf_safe(); return false; }\n#endif"),
+        ("""\t\tfd6818_set_rx_tone(&fd, FD6818_TONE_NONE, 0);\t// 0x51's enable would add the FD6818's tone to the C7000's
+\t\tfd6818_fm_tx_prepare(&fd);
+\t\ttx_wide = bw == RADIO_BW_25K;
+\t\thrc7000_set_subtone(&modem, true, c7_tone(tone != NULL ? tone->type : TONE_NONE),
+\t\t\ttone != NULL ? tone->value : 0);\t// before FM_PTT: the modem takes the DCS code then""", """\t\tconst bool fd_ctcss = CONFIG_DTMF && tone != NULL && tone->type == TONE_CTCSS;
+\t\t// Keep PL on the RF chip for the whole transmission. The modem's tone
+\t\t// sender can then change its FM signaling state and gain independently.
+\t\tif (fd_ctcss) {
+\t\t\tfd6818_set_tx_ctcss(&fd, tone->value);
+\t\t} else {
+\t\t\tfd6818_set_rx_tone(&fd, FD6818_TONE_NONE, 0);
+\t\t}
+\t\tfd6818_fm_tx_prepare(&fd);
+\t\ttx_wide = bw == RADIO_BW_25K;
+\t\thrc7000_set_subtone(&modem, true, c7_tone(!fd_ctcss && tone != NULL ? tone->type : TONE_NONE),
+\t\t\t!fd_ctcss && tone != NULL ? tone->value : 0);\t// before FM_PTT: the modem takes the DCS code then"""),
         ("static void init(void)", "#if CONFIG_P25_NATIVE\nstatic void native_init(void);\n#endif\nstatic void init(void)"),
         ("hrc_fm_rx_attach(&modem);", "hrc_fm_rx_attach(&modem);\n#if CONFIG_P25_NATIVE\n\tnative_init();\n#endif"),
     ])
