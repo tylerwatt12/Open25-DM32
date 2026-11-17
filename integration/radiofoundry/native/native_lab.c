@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: MIT AND GPL-3.0-or-later */
+/* Original code retains MIT terms. Encryption additions retain GPL-3.0-or-later. */
 #include "native_lab.h"
 #include "board.h"
 #include "hal_time.h"
@@ -25,7 +26,12 @@ static void channel_view(radio_sm_t *sm)
     radio_state_t state=channel_denial && sm->ptt ? RS_TX_DENIED :
         live_owner() && (test.state==NT_ARMED || test.state==NT_TX || test.state==NT_DRAIN) ? RS_TX :
         p25_lab_channel_receiving() ? RS_RX : RS_IDLE;
-    if(sm->view.state!=state || sm->view.tx_deny!=channel_denial){
+    bool mismatch = false;
+#if CONFIG_P25_ENCRYPTION
+    mismatch = p25_lab_channel_mismatch();
+#endif
+    if(sm->view.state!=state || sm->view.tx_deny!=channel_denial || sm->view.p25_crypto_mismatch != mismatch){
+        sm->view.p25_crypto_mismatch = mismatch;
         sm->view.state=state;sm->view.tx_deny=channel_denial;sm->serial++;
     }
 }
@@ -38,6 +44,9 @@ static void channel_service(radio_sm_t *sm)
         const channel_t *ch=&sm->view.ch;
         if(!codeplug_p25_valid(ch) || !board_in_band(ch->rx_hz,false))return;
         if(!p25_lab_set_channel(ch->p25_nac,codeplug_p25_tx_nac(ch),ch->p25_tg,ch->p25_id))return;
+#if CONFIG_P25_ENCRYPTION
+        p25_lab_set_key_slot(ch->p25_key_slot, ch->p25_key_algorithm);
+#endif
         channel_selected=live_enabled=live_rx_pending=true;
         live_tx_pending=false;channel_denial=0;
     }
@@ -251,6 +260,11 @@ int native_lab_request(radio_sm_t *sm, const radio_req_t *r)
             if(live_owner() && test.state==NT_ARMED)nt_stop(&test,test.session,NT_USER_STOP);
         } else if(!sm->ptt) {
             channel_denial=radio_sm_tx_check(sm);
+#if CONFIG_P25_ENCRYPTION
+            const channel_t *ch = &sm->view.ch;
+            if (!channel_denial && !p25_lab_key_ready(ch->p25_key_slot, ch->p25_key_algorithm))
+                channel_denial = TXDENY_P25_KEY;
+#endif
             sm->ptt=true;
             if(!channel_denial) {
                 /* ARMED is visible while mic prefill runs, before nt_begin. */

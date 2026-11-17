@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: MIT AND GPL-3.0-or-later */
+/* Original clear voice path remains under MIT. Secure voice additions retain GPL-3.0-or-later. */
 #include "voice.h"
 #include "p25_runtime.h"
 
@@ -8,6 +9,12 @@ static void admission_reset(p25_voice *v)
     v->active_nac = P25_NAC_ANY;
     v->active_group = 0;
     v->active_source = 0;
+#if CONFIG_P25_ENCRYPTION
+    v->crypto_ready = v->expected_duid = v->encrypted_lc = 0;
+    v->crypto_sync_mismatch = v->crypto_warning_sent = 0;
+    v->last_frame_end = 0;
+    memset(v->crypto_stream, 0, sizeof v->crypto_stream);
+#endif
     dm32_imbe_init(&v->codec);
 }
 
@@ -51,6 +58,62 @@ void p25_voice_rx_dibit(p25_voice *v, uint8_t dibit)
         admission_reset(v);
         return;
     }
+#if CONFIG_P25_ENCRYPTION
+    int sync_matches = d.algorithm_id == v->crypto_algorithm &&
+        d.key_id == v->crypto_key_id && p25_crypto_key_bytes(d.algorithm_id);
+    if (v->crypto_ready && (d.nid.duid != v->expected_duid ||
+        v->framer.symbols_seen - v->last_frame_end != P25_LDU_BYTES * 4u))
+        v->crypto_ready = 0;
+    v->last_frame_end = v->framer.symbols_seen;
+    if (!d.metadata_valid || (d.nid.duid == P25_DUID_HDU && d.manufacturer_id > 1)) {
+        v->crypto_clear = v->have_group = v->crypto_ready = v->crypto_sync_mismatch = 0;
+    } else if (d.nid.duid == P25_DUID_HDU) {
+        admission_reset(v);
+        v->active_nac = d.nid.nac;
+        v->last_frame_end = v->framer.symbols_seen;
+        v->active_group = d.talkgroup;
+        v->have_group = d.talkgroup != 0;
+        v->crypto_clear = d.clear_voice;
+        v->crypto_sync_mismatch = !d.clear_voice && !sync_matches;
+        if (sync_matches) {
+            p25_crypto_stream(v->crypto_stream, v->crypto_key, d.message_indicator, d.algorithm_id);
+            v->crypto_ready = 1;
+            v->expected_duid = P25_DUID_LDU1;
+        }
+    } else if (d.nid.duid == P25_DUID_LDU1) {
+        if ((v->have_group && v->active_group != d.talkgroup) ||
+            (v->active_source && v->active_source != d.source_id)) {
+            v->crypto_clear = v->crypto_ready = v->crypto_sync_mismatch = 0;
+            v->crypto_warning_sent = 0;
+        }
+        v->active_group = d.talkgroup;
+        v->active_source = d.source_id;
+        v->have_group = d.talkgroup && d.source_id && d.source_id <= 9999999u;
+        v->encrypted_lc = !d.clear_voice;
+        if (v->encrypted_lc) v->crypto_clear = 0;
+        else v->crypto_ready = v->crypto_sync_mismatch = 0;
+        v->expected_duid = P25_DUID_LDU2;
+    } else if (d.nid.duid == P25_DUID_LDU2) {
+        v->crypto_clear = d.clear_voice;
+        v->crypto_sync_mismatch = !d.clear_voice && !sync_matches;
+        if (!sync_matches) v->crypto_ready = 0;
+    }
+    if (d.nid.duid != P25_DUID_LDU1 && d.nid.duid != P25_DUID_LDU2) return;
+    int addressed = v->have_group && v->active_source &&
+        (!v->group_filter || v->active_group == v->group_filter || v->active_group == 0xffff);
+    if (addressed && v->encrypted_lc && v->crypto_sync_mismatch && !v->crypto_warning_sent) {
+        v->rx_crypto_mismatch++;
+        v->crypto_warning_sent = 1;
+    }
+    int admitted = addressed && (v->encrypted_lc ? v->crypto_ready : v->crypto_clear);
+    if (admitted && v->crypto_ready)
+        p25_crypto_voice(v->crypto_stream, v->crypto_algorithm, d.nid.duid, d.imbe, d.low_speed_data);
+    if (d.nid.duid == P25_DUID_LDU2 && d.metadata_valid && sync_matches) {
+        p25_crypto_stream(v->crypto_stream, v->crypto_key, d.message_indicator, d.algorithm_id);
+        v->crypto_ready = 1;
+        v->expected_duid = P25_DUID_LDU1;
+    }
+#else
     if (!d.metadata_valid || (d.nid.duid == P25_DUID_HDU && d.manufacturer_id > 1)) {
         /* Do not reuse permission from a previous good header over damage. */
         v->crypto_clear = v->have_group = 0;
@@ -76,6 +139,7 @@ void p25_voice_rx_dibit(p25_voice *v, uint8_t dibit)
     if (d.nid.duid != P25_DUID_LDU1 && d.nid.duid != P25_DUID_LDU2) return;
     int admitted = v->crypto_clear && v->have_group &&
         (!v->group_filter || v->active_group == v->group_filter || v->active_group == 0xffff);
+#endif
     for (unsigned i = 0; i < 9; i++) {
         int16_t pcm[160] = {0};
         if (!admitted) v->rx_muted++;
@@ -115,6 +179,9 @@ void p25_voice_tx_abort(p25_voice *v)
     v->transmitting = v->started = v->stopping = v->terminator_pending = 0;
     v->count = v->head = v->tail = v->voice_count = v->flush_remaining = 0;
     v->packet_symbol = 0;
+#if CONFIG_P25_ENCRYPTION
+    memset(&v->tx_sync, 0, sizeof v->tx_sync);
+#endif
     p25_voice_rx_reset(v);
 }
 
@@ -125,6 +192,34 @@ static int fail(p25_voice *v)
     return 0;
 }
 
+#if CONFIG_P25_ENCRYPTION
+int p25_voice_tx_begin_secure(p25_voice *v, const p25_call *call, const p25_encryption_sync *sync)
+{
+    if (!call || v->transmitting || !call->talkgroup ||
+        !call->source_id || call->source_id > 9999999u) return 0;
+    p25_voice_tx_abort(v);
+    v->fault = 0;
+    if (sync) {
+        uint8_t any = 0;
+        for (unsigned i = 0; i < 8; i++) any |= sync->mi[i];
+        if (!any || !p25_crypto_key_bytes(sync->algorithm) || sync->algorithm != v->crypto_algorithm ||
+            sync->kid != v->crypto_key_id || p25_secure_header(call, sync, v->queue[0].data))
+            return 0;
+        v->tx_sync = *sync;
+        p25_crypto_stream(v->crypto_stream, v->crypto_key, sync->mi, sync->algorithm);
+    } else if (p25_encode_hdu(call, v->queue[0].data)) return 0;
+    v->call = *call;
+    v->transmitting = 1;
+    v->next_duid = P25_DUID_LDU1;
+    commit_packet(v, P25_HDU_BYTES);
+    return 1;
+}
+
+int p25_voice_tx_begin(p25_voice *v, const p25_call *call)
+{
+    return p25_voice_tx_begin_secure(v, call, NULL);
+}
+#else
 int p25_voice_tx_begin(p25_voice *v, const p25_call *call)
 {
     if (!call || v->transmitting || !call->talkgroup ||
@@ -139,13 +234,33 @@ int p25_voice_tx_begin(p25_voice *v, const p25_call *call)
     return 1;
 }
 
+#endif
+
 static int encode_frame(p25_voice *v, int16_t pcm[160])
 {
     if (!dm32_imbe_encode(&v->codec, pcm, v->voice[v->voice_count])) return fail(v);
     if (++v->voice_count < 9) return 1;
     p25_voice_packet *p = next_packet(v);
-    const uint8_t lsd[2] = {0, 0};
-    if (!p || p25_encode_ldu(&v->call, v->next_duid, v->voice, lsd, p->data)) return fail(v);
+    uint8_t lsd[2] = {0, 0};
+    if (!p) return fail(v);
+#if CONFIG_P25_ENCRYPTION
+    if (v->tx_sync.algorithm) {
+        for (unsigned i = 0; i < 9; i++)
+            v->voice[i][7] = (uint16_t)((v->voice[i][7] & ~1u) |
+                ((i + (v->next_duid == P25_DUID_LDU2)) & 1u));
+        p25_crypto_voice(v->crypto_stream, v->tx_sync.algorithm, v->next_duid, v->voice, lsd);
+        if (v->next_duid == P25_DUID_LDU2) {
+            p25_aes_next_mi(v->tx_sync.mi);
+            uint8_t allocated[9];
+            if (!v->advance_mi || !v->advance_mi(allocated) ||
+                memcmp(allocated, v->tx_sync.mi, sizeof allocated)) return fail(v);
+        }
+        if (p25_secure_ldu(&v->call, &v->tx_sync, v->next_duid, v->voice, lsd, p->data)) return fail(v);
+        if (v->next_duid == P25_DUID_LDU2)
+            p25_crypto_stream(v->crypto_stream, v->crypto_key, v->tx_sync.mi, v->tx_sync.algorithm);
+    } else
+#endif
+    if (p25_encode_ldu(&v->call, v->next_duid, v->voice, lsd, p->data)) return fail(v);
     commit_packet(v, P25_LDU_BYTES);
     v->voice_count = 0;
     v->next_duid ^= P25_DUID_LDU1 ^ P25_DUID_LDU2;

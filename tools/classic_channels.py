@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT AND GPL-3.0-or-later
+# Original transforms retain MIT terms. Encryption transforms retain GPL-3.0-or-later.
 # Portions Copyright (c) 2026 The RadioFoundry Authors; see LICENSES/RadioFoundry-MIT.txt.
 """Conventional P25 fields in RadioFoundry's existing channel store/editor."""
 
@@ -92,6 +93,9 @@ typedef struct {
 		struct { uint16_t p25_tg, p25_nac; uint32_t p25_id; };
 	};
 	uint16_t p25_tx_nac_override; /* zero inherits RX; otherwise TX NAC + 1 */
+#if CONFIG_P25_ENCRYPTION
+	uint8_t p25_key_slot, p25_key_algorithm;
+#endif
 #else
 	uint16_t contact, listen_list;
 	uint32_t dmr_id;
@@ -116,6 +120,9 @@ static inline uint16_t codeplug_p25_tx_nac(const channel_t *ch)
 static inline bool codeplug_p25_valid(const channel_t *ch)
 {
 	uint16_t tx_nac=codeplug_p25_tx_nac(ch);
+#if CONFIG_P25_ENCRYPTION
+	if (ch->p25_key_slot > 8u || ch->p25_key_algorithm > 3u) return false;
+#endif
 	return ch->bw == RADIO_BW_12K5 && ch->p25_nac <= 0xFFFu &&
 	       ch->p25_nac != 0xF7Fu && ch->p25_id <= 9999999u &&
 	       (!ch->p25_tx_nac_override || (tx_nac < 0x1000u && tx_nac != 0xF7Eu && tx_nac != 0xF7Fu)) &&
@@ -128,6 +135,12 @@ static inline bool codeplug_p25_valid(const channel_t *ch)
         ('\tout->alias_tx = (uint8_t)', '''#if CONFIG_P25_CHANNELS
 	if (r[CH_MODE] == 0xA5u) {
 		out->mode = RADIO_MODE_P25;
+#if CONFIG_P25_ENCRYPTION
+		out->p25_key_slot = r[CH_SFR_A] >= 0xB1u && r[CH_SFR_A] <= 0xB8u ?
+		    (uint8_t)(r[CH_SFR_A] - 0xB0u) : 0;
+		out->p25_key_algorithm = r[CH_SFR_B] >= 0xC0u && r[CH_SFR_B] <= 0xC3u ?
+		    (uint8_t)(r[CH_SFR_B] - 0xC0u) : 0;
+#endif
 		out->p25_nac = (uint16_t)(((r[CH_CC] & 15u) << 8) | r[CH_RX_GROUP]);
 		out->dmo = out->roam = out->vox = false;
         unsigned tag=r[CH_CC] >> 4;
@@ -152,7 +165,13 @@ static inline bool codeplug_p25_valid(const channel_t *ch)
 #endif'''),
         ('\tr[CH_RX_GROUP] = (uint8_t)(ch->listen_list <= 0xFFu ? ch->listen_list : 0);', '''\tr[CH_RX_GROUP] = (uint8_t)(ch->listen_list <= 0xFFu ? ch->listen_list : 0);
 #if CONFIG_P25_CHANNELS
-\tif (codeplug_mode_p25(ch->mode)) r[CH_RX_GROUP] = (uint8_t)ch->p25_nac;
+\tif (codeplug_mode_p25(ch->mode)) {
+		r[CH_RX_GROUP] = (uint8_t)ch->p25_nac;
+#if CONFIG_P25_ENCRYPTION
+		r[CH_SFR_A] = (uint8_t)(0xB0u + ch->p25_key_slot);
+		r[CH_SFR_B] = (uint8_t)(0xC0u + ch->p25_key_algorithm);
+#endif
+	}
 #endif'''),
         ('\tstorage_lock();\n\tbool ok = materialize() && flash_read(channel_addr(number), r, sizeof(r));', '''#if CONFIG_P25_CHANNELS
 \tif (codeplug_mode_p25(ch->mode) && !codeplug_p25_valid(ch)) return false;
@@ -160,35 +179,61 @@ static inline bool codeplug_p25_valid(const channel_t *ch)
 \tstorage_lock();
 \tbool ok = materialize() && flash_read(channel_addr(number), r, sizeof(r));'''),
     ])
+    transform('core/ui/ui_nav.h', [
+        ('SCR_TEXT, SCR_CHPICK, SCR_DISCARD,', 'SCR_TEXT, SCR_CHPICK, SCR_DISCARD, SCR_P25_PIN,'),
+        ('void ui_dirty(void);', 'void ui_dirty(void);\n#if CONFIG_P25_ENCRYPTION\nvoid ui_p25_pin_clear(void);\n#endif'),
+    ])
     transform('core/ui/ui_menus.c', [
+        ('sb_str(&b, "1-");\n\tsb_chr(&b, (char)(\'0\' + (last < 9 ? last : 9)));', 'sb_str(&b, CONFIG_P25_ENCRYPTION ? "0-" : "1-");\n\tsb_chr(&b, (char)(\'0\' + (last < 9 ? last : 9)));'),
+        ('// ======================= Tools =======================', '#if CONFIG_P25_ENCRYPTION\n#include "p25/p25_pin_ui.h"\n#endif\n\n// ======================= Tools ======================='),
+        ('T_BATTERY, T_ZONE_OFFER, T_COUNT', 'T_BATTERY, T_P25_KEYLOADER, T_ZONE_OFFER, T_COUNT'),
+        ('static bool tool_shown(uint16_t i)\n{', 'static bool tool_shown(uint16_t i)\n{\n\tif (i == T_P25_KEYLOADER) return CONFIG_P25_ENCRYPTION;'),
+        ('TRN("Battery"), TRN("Zones/Chs Received") };', 'TRN("Battery"), "P25 Keyloader", TRN("Zones/Chs Received") };'),
+        ("item_num(it, (uint16_t)(i + 1u));\t// the tool's own number", "if (i != T_ZONE_OFFER || !CONFIG_P25_ENCRYPTION) item_num(it, i == T_ZONE_OFFER ? 10u : (uint16_t)(i + 1u));\t// the tool's own number"),
+        ('case T_ZONE_OFFER: ui_push(SCR_OFFER, 0); break;', 'case T_ZONE_OFFER: ui_push(SCR_OFFER, 0); break;\n#if CONFIG_P25_ENCRYPTION\n\tcase T_P25_KEYLOADER:\n\t\tif (ui_view()->ch.mode != RADIO_MODE_FM) ui_toast("Select an FM channel first");\n\t\telse ui_push(SCR_P25_PIN, 0);\n\t\tbreak;\n#endif'),
+        ('[SCR_TEXT] = &text_screen, [SCR_DISCARD] = &discard_screen,', '[SCR_TEXT] = &text_screen, [SCR_DISCARD] = &discard_screen,\n#if CONFIG_P25_ENCRYPTION\n\t[SCR_P25_PIN] = &p25_pin_screen,\n#endif'),
         ('ui_toast(i == UI_CP_NEW ? TR("New codeplug started") : TR("Old codeplug kept: edit again"));',
          'ui_toast(i == UI_CP_NEW ? TR("Creating codeplug") : TR("Old codeplug kept: edit again"));'),
         ('static void contacts_item(uint16_t i, ui_item_t *it)', 'static void __attribute__((unused)) contacts_item(uint16_t i, ui_item_t *it)'),
-        ('CE_ZONES, CE_GO, CE_SHARE, CE_SAVE, CE_SAVE_NEW, CE_COUNT', '#if CONFIG_P25_CHANNELS\n       CE_P25_TG, CE_P25_NAC, CE_P25_TX_NAC, CE_P25_ID,\n#endif\n       CE_ZONES, CE_GO, CE_SHARE, CE_SAVE, CE_SAVE_NEW, CE_COUNT'),
-        ('[CE_SCAN] = CE_FIELD(scan_skip), [CE_ECO] = CE_FIELD(no_eco),', '[CE_SCAN] = CE_FIELD(scan_skip), [CE_ECO] = CE_FIELD(no_eco),\n#if CONFIG_P25_CHANNELS\n\t[CE_P25_TG] = CE_FIELD(p25_tg), [CE_P25_NAC] = CE_FIELD(p25_nac), [CE_P25_TX_NAC] = CE_FIELD(p25_tx_nac_override), [CE_P25_ID] = CE_FIELD(p25_id),\n#endif'),
-        ('\t\tif ((fm_only && dmr) || (dmr_only && !dmr) || (r == CE_MODE && !CONFIG_DMR))', '#if CONFIG_P25_CHANNELS\n\t\tbool p25 = codeplug_mode_p25(ced_ch.mode);\n\t\tbool p25_only = r >= CE_P25_TG && r <= CE_P25_ID;\n\t\tif ((p25_only && !p25) || (p25 && (fm_only || dmr_only || r == CE_ECO))) continue;\n#endif\n\t\tif ((fm_only && dmr) || (dmr_only && !dmr) || (r == CE_MODE && !CONFIG_DMR))'),
-        ('TRN("Battery saver"), TRN("Zones"), TRN("Tune to this ch"),', 'TRN("Battery saver"),\n#if CONFIG_P25_CHANNELS\n\t\tTRN("Talkgroup"), "RX NAC", "TX NAC", TRN("P25 Radio ID"),\n#endif\n\t\tTRN("Zones"), TRN("Tune to this ch"),'),
+        ('CE_ZONES, CE_GO, CE_SHARE, CE_SAVE, CE_SAVE_NEW, CE_COUNT', '#if CONFIG_P25_CHANNELS\n       CE_P25_TG, CE_P25_NAC, CE_P25_TX_NAC, CE_P25_ID,\n#if CONFIG_P25_ENCRYPTION\n       CE_P25_KEY, CE_P25_ALG,\n#endif\n#endif\n       CE_ZONES, CE_GO, CE_SHARE, CE_SAVE, CE_SAVE_NEW, CE_COUNT'),
+        ('[CE_SCAN] = CE_FIELD(scan_skip), [CE_ECO] = CE_FIELD(no_eco),', '[CE_SCAN] = CE_FIELD(scan_skip), [CE_ECO] = CE_FIELD(no_eco),\n#if CONFIG_P25_CHANNELS\n\t[CE_P25_TG] = CE_FIELD(p25_tg), [CE_P25_NAC] = CE_FIELD(p25_nac), [CE_P25_TX_NAC] = CE_FIELD(p25_tx_nac_override), [CE_P25_ID] = CE_FIELD(p25_id),\n#if CONFIG_P25_ENCRYPTION\n\t[CE_P25_KEY] = CE_FIELD(p25_key_slot), [CE_P25_ALG] = CE_FIELD(p25_key_algorithm),\n#endif\n#endif'),
+        ('\t\tif ((fm_only && dmr) || (dmr_only && !dmr) || (r == CE_MODE && !CONFIG_DMR))', '#if CONFIG_P25_CHANNELS\n\t\tbool p25 = codeplug_mode_p25(ced_ch.mode);\n\t\tbool p25_only = r >= CE_P25_TG && r <= CE_P25_ID;\n#if CONFIG_P25_ENCRYPTION\n\t\tp25_only = p25_only || r == CE_P25_KEY || r == CE_P25_ALG;\n#endif\n\t\tif ((p25_only && !p25) || (p25 && (fm_only || dmr_only || r == CE_ECO))) continue;\n#endif\n\t\tif ((fm_only && dmr) || (dmr_only && !dmr) || (r == CE_MODE && !CONFIG_DMR))'),
+        ('TRN("Battery saver"), TRN("Zones"), TRN("Tune to this ch"),', 'TRN("Battery saver"),\n#if CONFIG_P25_CHANNELS\n\t\tTRN("Talkgroup"), "RX NAC", "TX NAC", TRN("P25 Radio ID"),\n#if CONFIG_P25_ENCRYPTION\n\t\t"Encryption", "Algorithm",\n#endif\n#endif\n\t\tTRN("Zones"), TRN("Tune to this ch"),'),
         ('sb_str(&wb, ch->mode == RADIO_MODE_DMR ? "DMR" : radio_am_channel(ch) ? "AM" : "FM");', 'sb_str(&wb, codeplug_mode_p25(ch->mode) ? "P25" : ch->mode == RADIO_MODE_DMR ? "DMR" : radio_am_channel(ch) ? "AM" : "FM");'),
         ('sb_str(&b, ch->mode == RADIO_MODE_DMR ? "DMR" : "FM");', 'sb_str(&b, codeplug_mode_p25(ch->mode) ? "P25" : ch->mode == RADIO_MODE_DMR ? "DMR" : "FM");'),
         ('if (editing && (r == CE_RX || r == CE_TX || r == CE_ID)) {', 'if (editing && (r == CE_RX || r == CE_TX || r == CE_ID\n#if CONFIG_P25_CHANNELS\n\t\t|| r == CE_P25_TG || r == CE_P25_ID\n#endif\n\t\t)) {'),
         ('if (r != CE_ID && k == UI_ENTRY_MHZ)', 'if ((r == CE_RX || r == CE_TX) && k == UI_ENTRY_MHZ)'),
-        ('\tcase CE_NUMBER:\n\t\tsb_u32(&b, ced_num, 1);', '#if CONFIG_P25_CHANNELS\n\tcase CE_P25_TG: sb_u32(&b, ch->p25_tg, 1); break;\n\tcase CE_P25_ID: sb_u32(&b, ch->p25_id, 1); break;\n\tcase CE_P25_NAC:\n\tcase CE_P25_TX_NAC: {\n\t\tunsigned value = r==CE_P25_NAC ? ch->p25_nac : codeplug_p25_tx_nac(ch), cursor = 3;\n#if CONFIG_CHANNEL_EDIT\n\t\tif (editing) { value = (unsigned)ced_val; cursor = ced_len; }\n#endif\n        if (r==CE_P25_TX_NAC && (editing ? cursor==3 : !ch->p25_tx_nac_override)) {\n            sb_str(&b,TR("Same as RX")); break;\n        }\n\t\tsb_chr(&b, \'$\');\n\t\tfor (unsigned digit = 0; digit < 3; digit++) {\n\t\t\tif (digit == cursor) sb_chr(&b, \'[\');\n\t\t\tsb_chr(&b, "0123456789ABCDEF"[(value >> (4 * (2 - digit))) & 15u]);\n\t\t\tif (digit == cursor) sb_chr(&b, \']\');\n\t\t}\n\t\tbreak;\n\t}\n#endif\n\tcase CE_NUMBER:\n\t\tsb_u32(&b, ced_num, 1);'),
+        ('\tcase CE_NUMBER:\n\t\tsb_u32(&b, ced_num, 1);', '#if CONFIG_P25_CHANNELS\n\tcase CE_P25_TG: sb_u32(&b, ch->p25_tg, 1); break;\n\tcase CE_P25_ID: sb_u32(&b, ch->p25_id, 1); break;\n#if CONFIG_P25_ENCRYPTION\n\tcase CE_P25_KEY: {\n\t\tunsigned slot = (unsigned)(editing ? ced_val_or(ch->p25_key_slot) : ch->p25_key_slot);\n\t\tif (!slot) sb_str(&b, "Off");\n\t\telse { sb_str(&b, "Key slot "); sb_u32(&b, slot, 1); }\n\t\tbreak;\n\t}\n\tcase CE_P25_ALG: {\n\t\tstatic const char *const n[] = { "Auto", "AES-256", "DES-OFB", "ADP/RC4" };\n\t\tunsigned alg = (unsigned)(editing ? ced_val_or(ch->p25_key_algorithm) : ch->p25_key_algorithm);\n\t\tsb_str(&b, n[alg < 4 ? alg : 0]);\n\t\tbreak;\n\t}\n#endif\n\tcase CE_P25_NAC:\n\tcase CE_P25_TX_NAC: {\n\t\tunsigned value = r==CE_P25_NAC ? ch->p25_nac : codeplug_p25_tx_nac(ch), cursor = 3;\n#if CONFIG_CHANNEL_EDIT\n\t\tif (editing) { value = (unsigned)ced_val; cursor = ced_len; }\n#endif\n        if (r==CE_P25_TX_NAC && (editing ? cursor==3 : !ch->p25_tx_nac_override)) {\n            sb_str(&b,TR("Same as RX")); break;\n        }\n\t\tsb_chr(&b, \'$\');\n\t\tfor (unsigned digit = 0; digit < 3; digit++) {\n\t\t\tif (digit == cursor) sb_chr(&b, \'[\');\n\t\t\tsb_chr(&b, "0123456789ABCDEF"[(value >> (4 * (2 - digit))) & 15u]);\n\t\t\tif (digit == cursor) sb_chr(&b, \']\');\n\t\t}\n\t\tbreak;\n\t}\n#endif\n\tcase CE_NUMBER:\n\t\tsb_u32(&b, ced_num, 1);'),
         ('\tif (CONFIG_DMR && c->mode == RADIO_MODE_DMR && c->contact == 0)', '#if CONFIG_P25_CHANNELS\n\tif (codeplug_mode_p25(c->mode) && !codeplug_p25_valid(c))\n\t\treturn TR("Check P25 NAC, talkgroup and ID");\n#endif\n\tif (CONFIG_DMR && c->mode == RADIO_MODE_DMR && c->contact == 0)'),
-        ('\tcase CE_CC:\n\t\tced_val = (ced_val + dir + 16) % 16;', '#if CONFIG_P25_CHANNELS\n\tcase CE_P25_NAC:\n\tcase CE_P25_TX_NAC: {\n        if (ced_len==3) ced_len=0;\n\t\tunsigned shift = 4u * (2u - ced_len);\n\t\tunsigned value = (((unsigned)ced_val >> shift) + (unsigned)dir) & 15u;\n\t\tced_val = (ced_val & ~(15u << shift)) | (value << shift);\n\t\tbreak;\n\t}\n#endif\n\tcase CE_CC:\n\t\tced_val = (ced_val + dir + 16) % 16;'),
+        ('\tcase CE_CC:\n\t\tced_val = (ced_val + dir + 16) % 16;', '#if CONFIG_P25_CHANNELS\n#if CONFIG_P25_ENCRYPTION\n\tcase CE_P25_KEY: ced_val = (ced_val + dir + 9) % 9; break;\n\tcase CE_P25_ALG: ced_val = (ced_val + dir + 4) % 4; break;\n#endif\n\tcase CE_P25_NAC:\n\tcase CE_P25_TX_NAC: {\n        if (ced_len==3) ced_len=0;\n\t\tunsigned shift = 4u * (2u - ced_len);\n\t\tunsigned value = (((unsigned)ced_val >> shift) + (unsigned)dir) & 15u;\n\t\tced_val = (ced_val & ~(15u << shift)) | (value << shift);\n\t\tbreak;\n\t}\n#endif\n\tcase CE_CC:\n\t\tced_val = (ced_val + dir + 16) % 16;'),
         ('\tcase CE_ID:\n\t\tif (ced_len >= CE_DIGITS)', '#if CONFIG_P25_CHANNELS\n\tcase CE_P25_NAC:\n\tcase CE_P25_TX_NAC: {\n        if (ced_len==3) ced_len=0;\n\t\tunsigned shift = 4u * (2u - ced_len);\n\t\tced_val = (ced_val & ~(15u << shift)) | ((unsigned)(d - \'0\') << shift);\n\t\tced_len = (uint8_t)((ced_len + 1) % 3);\n\t\tbreak;\n\t}\n\tcase CE_P25_TG:\n\tcase CE_P25_ID:\n\t\tif (v > (ced_edit == CE_P25_TG ? 65535 : 9999999)) {\n\t\t\tui_toast(TR("Value too large")); break;\n\t\t}\n        /* fall through */\n        __attribute__((fallthrough));\n#endif\n\tcase CE_ID:\n\t\tif (ced_len >= CE_DIGITS)'),
-        ('\tcase CE_ID:\n\t\tif (ced_len > 0)', '#if CONFIG_P25_CHANNELS\n\tcase CE_P25_TG: if (ced_len) c->p25_tg = (uint16_t)ced_val; break;\n\tcase CE_P25_ID: if (ced_len) c->p25_id = (uint32_t)ced_val; break;\n\tcase CE_P25_NAC: c->p25_nac = (uint16_t)ced_val; break;\n    case CE_P25_TX_NAC: c->p25_tx_nac_override=ced_len==3 ? 0 : (uint16_t)(ced_val+1); break;\n#endif\n\tcase CE_ID:\n\t\tif (ced_len > 0)'),
+        ('\tcase CE_ID:\n\t\tif (ced_len > 0)', '#if CONFIG_P25_CHANNELS\n\tcase CE_P25_TG: if (ced_len) c->p25_tg = (uint16_t)ced_val; break;\n\tcase CE_P25_ID: if (ced_len) c->p25_id = (uint32_t)ced_val; break;\n#if CONFIG_P25_ENCRYPTION\n\tcase CE_P25_KEY: c->p25_key_slot = (uint8_t)ced_val; break;\n\tcase CE_P25_ALG: c->p25_key_algorithm = (uint8_t)ced_val; break;\n#endif\n\tcase CE_P25_NAC: c->p25_nac = (uint16_t)ced_val; break;\n    case CE_P25_TX_NAC: c->p25_tx_nac_override=ced_len==3 ? 0 : (uint16_t)(ced_val+1); break;\n#endif\n\tcase CE_ID:\n\t\tif (ced_len > 0)'),
         ('static bool chinfo_key(const input_event_t *ev)\n{\n\tbool press = ev->gesture == GESTURE_PRESS || ev->gesture == GESTURE_LONG;\n\tif (ced_edit == CE_NONE) {\n\t\tif (ev->action == ACT_BACK && ev->gesture == GESTURE_PRESS && ced_num != 0 &&\n\t\t\t\t(ced_new || ced_changed(CE_COUNT))) {\n\t\t\tdiscard_contact = false;\n\t\t\tui_push(SCR_DISCARD, 0);\n\t\t\treturn true;\n\t\t}\n\t\treturn false;\n\t}\n\tint dir = ev->action == ACT_NAV_UP ? 1 : ev->action == ACT_NAV_DOWN ? -1 :\n\t\tev->action == ACT_ENC_STEP ? (ev->value > 0 ? 1 : -1) : 0;\n\tif (dir != 0 && ev->gesture != GESTURE_UP) {', 'static bool chinfo_key(const input_event_t *ev)\n{\n\tbool press = ev->gesture == GESTURE_PRESS || ev->gesture == GESTURE_LONG;\n\tif (ced_edit == CE_NONE) {\n\t\tif (ev->action == ACT_BACK && ev->gesture == GESTURE_PRESS && ced_num != 0 &&\n\t\t\t\t(ced_new || ced_changed(CE_COUNT))) {\n\t\t\tdiscard_contact = false;\n\t\t\tui_push(SCR_DISCARD, 0);\n\t\t\treturn true;\n\t\t}\n\t\treturn false;\n\t}\n\tint dir = ev->action == ACT_NAV_UP ? 1 : ev->action == ACT_NAV_DOWN ? -1 :\n\t\tev->action == ACT_ENC_STEP ? (ev->value > 0 ? 1 : -1) : 0;\n#if CONFIG_P25_CHANNELS\n    if ((ced_edit == CE_P25_NAC || ced_edit == CE_P25_TX_NAC) && dir && ev->gesture != GESTURE_UP && ev->action != ACT_ENC_STEP) {\n        int positions=ced_edit==CE_P25_TX_NAC ? 4 : 3;\n        ced_len = (uint8_t)((ced_len + dir + positions) % positions);\n        ui_dirty(); return true;\n    }\n#endif\n\tif (dir != 0 && ev->gesture != GESTURE_UP) {'),
         ('if (ced_edit != CE_RX && ced_edit != CE_TX && ced_edit != CE_ID)', 'if (ced_edit != CE_RX && ced_edit != CE_TX && ced_edit != CE_ID\n#if CONFIG_P25_CHANNELS\n\t\t\t&& ced_edit != CE_P25_TG && ced_edit != CE_P25_ID\n#endif\n\t\t\t)'),
-        ('\tcase CE_MODE: c->mode = c->mode == RADIO_MODE_DMR ? RADIO_MODE_FM : RADIO_MODE_DMR; break;', '\tcase CE_MODE:\n#if CONFIG_P25_CHANNELS\n\t\tif (c->mode == RADIO_MODE_DMR) {\n\t\t\tc->mode = RADIO_MODE_P25; c->p25_nac = 0x293; c->p25_tx_nac_override=0;\n\t\t\tc->p25_tg = 1; c->p25_id = 1; c->bw = RADIO_BW_12K5;\n\t\t\tc->dmo = c->roam = c->vox = false;\n\t\t} else if (codeplug_mode_p25(c->mode)) {\n\t\t\tc->mode = RADIO_MODE_FM; c->contact = c->listen_list = c->dmr_id = 0;\n\t\t} else\n#endif\n\t\t\tc->mode = c->mode == RADIO_MODE_DMR ? RADIO_MODE_FM : RADIO_MODE_DMR;\n\t\tbreak;\n#if CONFIG_P25_CHANNELS\n\tcase CE_P25_NAC: ced_edit = r; ced_val = c->p25_nac; ced_len = 0; break;\n    case CE_P25_TX_NAC: ced_edit=r; ced_val=codeplug_p25_tx_nac(c); ced_len=c->p25_tx_nac_override ? 0 : 3; break;\n\tcase CE_P25_TG:\n\tcase CE_P25_ID:\n#endif'),
+        ('\tcase CE_MODE: c->mode = c->mode == RADIO_MODE_DMR ? RADIO_MODE_FM : RADIO_MODE_DMR; break;', '\tcase CE_MODE:\n#if CONFIG_P25_CHANNELS\n\t\tif (c->mode == RADIO_MODE_DMR) {\n\t\t\tc->mode = RADIO_MODE_P25; c->p25_nac = 0x293; c->p25_tx_nac_override=0;\n\t\t\tc->p25_tg = 1; c->p25_id = 1; c->bw = RADIO_BW_12K5;\n\t\t\tc->dmo = c->roam = c->vox = false;\n\t\t} else if (codeplug_mode_p25(c->mode)) {\n\t\t\tc->mode = RADIO_MODE_FM; c->contact = c->listen_list = c->dmr_id = 0;\n\t\t} else\n#endif\n\t\t\tc->mode = c->mode == RADIO_MODE_DMR ? RADIO_MODE_FM : RADIO_MODE_DMR;\n\t\tbreak;\n#if CONFIG_P25_CHANNELS\n#if CONFIG_P25_ENCRYPTION\n\tcase CE_P25_KEY: ced_edit = r; ced_val = c->p25_key_slot; ced_len = 0; break;\n\tcase CE_P25_ALG: ced_edit = r; ced_val = c->p25_key_algorithm; ced_len = 0; break;\n#endif\n\tcase CE_P25_NAC: ced_edit = r; ced_val = c->p25_nac; ced_len = 0; break;\n    case CE_P25_TX_NAC: ced_edit=r; ced_val=codeplug_p25_tx_nac(c); ced_len=c->p25_tx_nac_override ? 0 : 3; break;\n\tcase CE_P25_TG:\n\tcase CE_P25_ID:\n#endif'),
         ('ced_edit == CE_TX_TONE) && ced_len > 0)', 'ced_edit == CE_TX_TONE\n#if CONFIG_P25_CHANNELS\n             || ced_edit == CE_P25_TG || ced_edit == CE_P25_ID\n#endif\n             ) && ced_len > 0)'),
     ])
     transform('core/ui/ui_screens.c', [
+        ('case TXDENY_SFR_RPT: sb_str', 'case TXDENY_P25_KEY: sb_str(&b, "P25 key unavailable"); break;\n\tcase TXDENY_SFR_RPT: sb_str'),
+        ('case TXDENY_SFR_RPT: return', 'case TXDENY_P25_KEY: return "Load or select matching key";\n\tcase TXDENY_SFR_RPT: return'),
+        ('ui_draw_bottom(s, home_hint(v, s));', 'if (codeplug_mode_p25(v->ch.mode) && v->p25_crypto_mismatch &&\n\t    v->state != RS_TX && v->state != RS_TX_DENIED) {\n\t\tconst font_t *font = ui_layout.small;\n\t\tint w = gfx_width();\n\t\tint y = ui_layout.activity_y + (ui_layout.activity_h - font->h) / 2;\n\t\tchar fit[32];\n\t\tgfx_text_fit(font, "Encrypt Mismatch", w, fit, sizeof fit);\n\t\tgfx_fill(0, y - 1, w, font->h + 2, ui_col.bg);\n\t\tgfx_text(font, (w - gfx_text_width(font, fit)) / 2, y, fit, ui_col.tx);\n\t}\n\tui_draw_bottom(s, home_hint(v, s));'),
+        ('#include "config.h"', '#include "config.h"\n#if CONFIG_P25_ENCRYPTION\n#include "p25/p25_lab.h"\n#endif'),
+        ('\tif (s->locked) {\n\t\tint lw = ih - ih / 4;', '#if CONFIG_P25_ENCRYPTION\n\tif (codeplug_mode_p25(v->ch.mode) && p25_lab_encryption_selected(v->ch.p25_key_slot)) {\n\t\tstatic const uint16_t key[] = { 0x01c, 0x022, 0x022, 0x3fe, 0x2a2, 0x01c };\n\t\tint scale = ih >= 14 ? 2 : 1;\n\t\tint top = iy + (ih - 6 * scale) / 2;\n\t\trx -= 11 * scale + f->w / 2;\n\t\tfor (unsigned row = 0; row < sizeof key / sizeof key[0]; row++)\n\t\t\tfor (unsigned col = 0; col < 10; col++)\n\t\t\t\tif (key[row] & (1u << col))\n\t\t\t\t\tgfx_fill(rx + col * scale, top + row * scale, scale, scale, sfg);\n\t}\n#endif\n\tif (s->locked) {\n\t\tint lw = ih - ih / 4;'),
+        ('\tuint8_t kind = v->ch.mode == RADIO_MODE_DMR ? dmr[pos] : fm[pos];', '#if CONFIG_P25_ENCRYPTION\n\tif (codeplug_mode_p25(v->ch.mode) && pos == 5) return QT_PRIVACY;\n#endif\n\tuint8_t kind = v->ch.mode == RADIO_MODE_DMR ? dmr[pos] : fm[pos];'),
+        ('\tsb_str(&b, tr(names[kind]));', '#if CONFIG_P25_ENCRYPTION\n\tif (kind == QT_PRIVACY && codeplug_mode_p25(v->ch.mode))\n\t\tsb_str(&b, TR("Encrypt"));\n\telse\n#endif\n\tsb_str(&b, tr(names[kind]));'),
+        ('\tcase QT_PRIVACY:\n\t\tsb_str(&b, s->privacy', '\tcase QT_PRIVACY:\n#if CONFIG_P25_ENCRYPTION\n\t\tif (codeplug_mode_p25(v->ch.mode)) {\n\t\t\tsb_str(&b, p25_lab_encryption_on() ? TR("On") : TR("Off"));\n\t\t\treturn true;\n\t\t}\n#endif\n\t\tsb_str(&b, s->privacy'),
         ('return v->ch.mode == RADIO_MODE_DMR ? "DMR" : v->am ? "AM" : "FM";', 'return codeplug_mode_p25(v->ch.mode) ? "P25" : v->ch.mode == RADIO_MODE_DMR ? "DMR" : v->am ? "AM" : "FM";'),
     ])
     transform('core/ui/ui_svc.h', [
         ('} ui_event_kind_t;', '\tUI_EV_CODEPLUG_STARTED,\t// Start new and its held edit finished successfully\n} ui_event_kind_t;'),
     ])
     transform('core/ui/ui_app.c', [
+        ('void ui_pop(void)\n{', 'void ui_pop(void)\n{\n#if CONFIG_P25_ENCRYPTION\n\tif (stack[sp].scr == SCR_P25_PIN) ui_p25_pin_clear();\n#endif'),
+        ('void ui_go_home(void)\n{', 'void ui_go_home(void)\n{\n#if CONFIG_P25_ENCRYPTION\n\tui_p25_pin_clear();\n#endif'),
+        ('bool typing = stack[sp].scr == SCR_TEXT;', 'bool typing = stack[sp].scr == SCR_TEXT || stack[sp].scr == SCR_P25_PIN;'),
+        ('ui_st.now_ms = now_ms;', 'ui_st.now_ms = now_ms;\n#if CONFIG_P25_ENCRYPTION\n\tstatic p25_pin_status pin_seen;\n\tstatic uint8_t pin_progress_seen;\n\tp25_pin_status pin_now = p25_keys_pin_status();\n\tuint8_t pin_progress = p25_keys_pin_progress();\n\tif (pin_now != pin_seen || pin_progress != pin_progress_seen) {\n\t\tpin_seen = pin_now;\n\t\tpin_progress_seen = pin_progress;\n\t\tif (stack[sp].scr == SCR_P25_PIN) {\n\t\t\tif (pin_now != P25_PIN_NEW && pin_now != P25_PIN_ENTER) ui_p25_pin_clear();\n\t\t\tdirty = true;\n\t\t}\n\t}\n#endif'),
+        ('#include "config.h"', '#include "config.h"\n#if CONFIG_P25_ENCRYPTION\n#include "p25/p25_lab.h"\n#include "p25/p25_keys.h"\n#endif'),
+        ('\tcase QT_PRIVACY:\n\t\tif (ui_svc_privacy', '\tcase QT_PRIVACY:\n#if CONFIG_P25_ENCRYPTION\n\t\tif (codeplug_mode_p25(view->ch.mode)) {\n\t\t\tif (p25_lab_toggle_encryption())\n\t\t\t\tui_toast(p25_lab_encryption_on() ? TR("Encryption on") : TR("Encryption off"));\n\t\t\telse ui_toast(TR("Radio busy"));\n\t\t\tbreak;\n\t\t}\n#endif\n\t\tif (ui_svc_privacy'),
         ('\tcase UI_EV_CODEPLUG_FOREIGN:', '\tcase UI_EV_CODEPLUG_STARTED:\n\t\tui_toast(TR("New codeplug started"));\n\t\tbreak;\n\tcase UI_EV_CODEPLUG_FOREIGN:'),
     ])
     transform('core/ui/ui_svc_storage.c', [

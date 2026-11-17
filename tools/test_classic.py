@@ -36,6 +36,10 @@ def main():
     run(['clang',*flags,ROOT/'tests/classic/test_channels.c',APP/'core/codeplug/codeplug.c',
          APP/'core/storage/storage.c',host/'sim/sim_flash.c','-o',OUT/'test_channels'],cwd=ROOT)
     run([OUT/'test_channels'],cwd=ROOT)
+    run(['clang',*flags,'-DCONFIG_P25_ENCRYPTION=1',ROOT/'tests/classic/test_channels.c',
+         APP/'core/codeplug/codeplug.c', APP/'core/storage/storage.c', host/'sim/sim_flash.c',
+         '-o',OUT/'test_channels_encryption'],cwd=ROOT)
+    run([OUT/'test_channels_encryption'],cwd=ROOT)
     # Link the actual UI storage job to the actual settings/codeplug/journal owners.
     run(['clang',*flags,'-ffunction-sections','-fdata-sections',
          '-DCONFIG_ZONE_EDIT=0','-DCONFIG_CONTACT_EDIT=0','-DCONFIG_KEY_ASSIGN=0',

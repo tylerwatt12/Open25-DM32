@@ -10,15 +10,27 @@ int main(void)
     fresh();
     channel_t p=make("P25 local", 438500000, 430900000), back;
     p.mode=RADIO_MODE_P25;p.p25_nac=0xABC;p.p25_tg=65535;p.p25_id=9999999;p.power=8;
+#if CONFIG_P25_ENCRYPTION
+    p.p25_key_slot = 8;
+    p.p25_key_algorithm = 2;
+#endif
     CHECK(codeplug_set_channel(9,&p));
     CHECK(codeplug_init()==CODEPLUG_OPENFW);
     CHECK(codeplug_channel(9,&back));
     CHECK(back.mode==RADIO_MODE_P25 && back.p25_nac==0xABC && back.p25_tg==65535);
     CHECK(back.p25_id==9999999 && back.power==8 && back.rx_hz==p.rx_hz && back.tx_hz==p.tx_hz);
+#if CONFIG_P25_ENCRYPTION
+    CHECK(back.p25_key_slot == 8 && back.p25_key_algorithm == 2);
+#endif
     CHECK(!back.roam && !back.dmo && !back.vox);
     uint8_t r[CODEPLUG_OPENFW_CHANNEL_SIZE];memset(r,0xFF,sizeof r);
     codeplug_openfw_encode(&p,r);
     CHECK(r[0x18]==0xA5 && r[0x2C]==0xDA && r[0x2B]==0xBC);
+#if CONFIG_P25_ENCRYPTION
+    CHECK(r[0x25] == 0xB8 && r[0x2A] == 0xC2);
+    r[0x25] = 0xB9; r[0x2A] = 0xff;
+    CHECK(codeplug_openfw_decode(r, &back) && !back.p25_key_slot && !back.p25_key_algorithm);
+#endif
     r[0x2C]&=15;CHECK(!codeplug_openfw_decode(r,&back));
     const channel_t valid=p;
     for(unsigned invalid=0;invalid<7;invalid++) {

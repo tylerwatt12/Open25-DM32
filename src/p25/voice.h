@@ -1,8 +1,16 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: MIT AND GPL-3.0-or-later */
+/* Original declarations retain MIT terms. Secure voice additions retain GPL-3.0-or-later. */
 #ifndef P25_VOICE_H
 #define P25_VOICE_H
 #include "p25.h"
 #include "dm32_imbe.h"
+#ifndef CONFIG_P25_ENCRYPTION
+#define CONFIG_P25_ENCRYPTION 0
+#endif
+#if CONFIG_P25_ENCRYPTION
+#include "secure_frame.h"
+#include "crypto_voice.h"
+#endif
 
 /* Conventional, clear, group voice; half duplex. All calls and the PCM sink
  * run in ONE worker task, never in an ISR. No dynamic allocation. The sink
@@ -33,6 +41,15 @@ typedef struct {
     uint8_t transmitting, started, stopping, terminator_pending, fault;
     uint8_t crypto_clear, have_group;
     uint32_t rx_frames, rx_voice, rx_muted, rx_erasures, tx_frames, tx_underruns;
+#if CONFIG_P25_ENCRYPTION
+    p25_encryption_sync tx_sync;
+    uint8_t crypto_algorithm, crypto_ready, expected_duid, encrypted_lc;
+    uint8_t crypto_sync_mismatch, crypto_warning_sent;
+    uint16_t crypto_key_id;
+    uint8_t crypto_key[32], crypto_stream[240];
+    uint32_t last_frame_end, rx_crypto_mismatch;
+    int (*advance_mi)(uint8_t mi[9]);
+#endif
     uint32_t (*micros)(void); /* optional task-level profiling, no clock assumption */
     uint32_t fec_max_us, imbe_max_us;
 } p25_voice;
@@ -44,6 +61,10 @@ void p25_voice_init(p25_voice *v, uint16_t nac, uint16_t group,
 void p25_voice_rx_reset(p25_voice *v);
 void p25_voice_rx_dibit(p25_voice *v, uint8_t dibit);
 int p25_voice_tx_begin(p25_voice *v, const p25_call *call);
+#if CONFIG_P25_ENCRYPTION
+int p25_voice_tx_begin_secure(p25_voice *v, const p25_call *call,
+                              const p25_encryption_sync *sync);
+#endif
 /* Exactly one 8 kHz / 20 ms microphone block; mutable for the codec.
  * Returns 0 on invalid state, codec failure or queue overflow. Abort/unkey.
  * Producer must be paced by microphone time, not called in an unbounded loop. */

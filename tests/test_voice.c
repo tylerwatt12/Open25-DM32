@@ -309,6 +309,63 @@ static void layout(void)
     assert(phy.gaps == 1 && !v.crypto_clear && !v.have_group);
     assert(p25_phy_rx_record(&phy, &v, 3, 3, ram) == -1 && phy.unsupported == 1);
 }
+#if CONFIG_P25_ENCRYPTION
+static uint8_t allocated_mi[9];
+
+static int allocate_mi(uint8_t mi[9])
+{
+    memcpy(mi, allocated_mi, sizeof allocated_mi);
+    p25_aes_next_mi(allocated_mi);
+    return 1;
+}
+
+static void encrypted_group_voice(void)
+{
+    static const uint8_t algs[] = {P25_ALG_AES256, P25_ALG_DES, P25_ALG_ADP};
+    uint8_t air[P25_HDU_BYTES + 2 * P25_LDU_BYTES + P25_TDU_BYTES];
+    uint8_t key[32];
+    for (unsigned i = 0; i < sizeof key; i++) key[i] = (uint8_t)i;
+    memset(allocated_mi, 0, sizeof allocated_mi);
+    allocated_mi[0] = 1;
+    for (unsigned i = 0; i < sizeof algs; i++) {
+        p25_encryption_sync sync = {.algorithm = algs[i], .kid = 0x1234};
+        reset(call.nac, call.talkgroup);
+        v.crypto_algorithm = sync.algorithm;
+        v.crypto_key_id = sync.kid;
+        memcpy(v.crypto_key, key, sizeof key);
+        v.advance_mi = allocate_mi;
+        assert(allocate_mi(sync.mi));
+        assert(p25_voice_tx_begin_secure(&v, &call, &sync));
+        for (unsigned frame = 0; frame < 10; frame++) pcm(frame);
+        assert(p25_voice_tx_end(&v));
+        size_t bytes = drain(air, sizeof air);
+        assert(bytes == sizeof air);
+        p25_decoded decoded;
+        assert(!p25_decode_frame(air, P25_HDU_BYTES, &decoded));
+        assert(decoded.metadata_valid && decoded.algorithm_id == sync.algorithm &&
+               decoded.key_id == sync.kid && !memcmp(decoded.message_indicator, sync.mi, 9));
+        const uint8_t *ldu2 = air + P25_HDU_BYTES + P25_LDU_BYTES;
+        assert(!p25_decode_frame(ldu2, P25_LDU_BYTES, &decoded));
+        p25_aes_next_mi(sync.mi);
+        assert(decoded.metadata_valid && !memcmp(decoded.message_indicator, sync.mi, 9));
+        reset(call.nac, call.talkgroup);
+        v.crypto_algorithm = algs[i];
+        v.crypto_key_id = sync.kid;
+        memcpy(v.crypto_key, key, sizeof key);
+        feed(air, bytes);
+        assert(v.rx_voice == 18 && loud && !v.rx_crypto_mismatch);
+        reset(call.nac, call.talkgroup);
+        v.crypto_algorithm = algs[i];
+        v.crypto_key_id = sync.kid + 1;
+        feed(air, bytes);
+        assert(!loud && v.rx_muted == 18 && v.rx_crypto_mismatch == 1);
+        reset(call.nac, call.talkgroup + 1);
+        feed(air, bytes);
+        assert(!loud && v.rx_muted == 18 && !v.rx_crypto_mismatch);
+    }
+}
+#endif
+
 int main(void)
 {
     p25_selftest_result r;
@@ -317,6 +374,9 @@ int main(void)
             r.ok, r.air_bytes, r.pcm_blocks, r.pcm_crc, r.nonzero_samples, r.session_bytes);
     assert(r.ok);
     short_call(); paced_call(); encoder_tail(); faults(); layout();
+#if CONFIG_P25_ENCRYPTION
+    encrypted_group_voice();
+#endif
     puts("PASS conventional voice lifecycle, pacing, admission, underrun, overflow, PHY layouts and loss");
     return 0;
 }

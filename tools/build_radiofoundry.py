@@ -88,7 +88,7 @@ def prepare():
         ('# Dependencies\n', 'CONFIG_P25 ?= n\nCONFIG_P25_NATIVE ?= n\nCONFIG_FIRSTBOOT ?= n\nCONFIG_P25_BENCH ?= y\nCONFIG_CPU_PROFILE ?= n\nCONFIG_DEV_UPDATE ?= n\nCONFIG_DEV_TX ?= n\nCONFIG_P25_CHANNELS ?= n\nFEATURES += P25 P25_NATIVE FIRSTBOOT P25_BENCH CPU_PROFILE DEV_UPDATE DEV_TX P25_CHANNELS\nifeq ($(CONFIG_DEV_TX),y)\nifneq ($(CONFIG_P25_NATIVE),y)\n$(error DEV_TX requires P25_NATIVE=y)\nendif\nendif\nifeq ($(CONFIG_DEV_UPDATE),y)\nifneq ($(CONFIG_FIRSTBOOT)$(CONFIG_STUB_ENTRY),yy)\n$(error DEV_UPDATE requires FIRSTBOOT=y STUB_ENTRY=y)\nendif\nendif\nifeq ($(CONFIG_FIRSTBOOT),y)\nifneq ($(CONFIG_CPS_OPENFW)$(CONFIG_CPS_FAST),nn)\n$(error FIRSTBOOT requires CPS_OPENFW=n CPS_FAST=n)\nendif\nifneq ($(CONFIG_STUB_ENTRY),$(CONFIG_DEV_UPDATE))\n$(error FIRSTBOOT requires STUB_ENTRY to match DEV_UPDATE)\nendif\nendif\nifeq ($(CONFIG_P25_NATIVE),y)\nifneq ($(CONFIG_P25)$(CONFIG_DMR),yy)\n$(error P25_NATIVE needs P25=y and DMR=y)\nendif\nendif\n\n# Dependencies\n'),
     ])
     transform("core/config.h", [
-        ('#define RFOUNDRY_CONFIG_H\n', '#define RFOUNDRY_CONFIG_H\n#ifndef CONFIG_P25_CHANNELS\n#define CONFIG_P25_CHANNELS 0\n#endif\n#ifndef CONFIG_P25\n#define CONFIG_P25 0\n#endif\n#ifndef CONFIG_P25_NATIVE\n#define CONFIG_P25_NATIVE 0\n#endif\n#ifndef CONFIG_P25_BENCH\n#define CONFIG_P25_BENCH 1\n#endif\n#ifndef CONFIG_DEV_UPDATE\n#define CONFIG_DEV_UPDATE 0\n#endif\n#ifndef CONFIG_DEV_TX\n#define CONFIG_DEV_TX 0\n#endif\n#ifndef CONFIG_CPU_PROFILE\n#define CONFIG_CPU_PROFILE 0\n#endif\n#ifndef CONFIG_FIRSTBOOT\n#define CONFIG_FIRSTBOOT 0\n#endif\n#if CONFIG_FIRSTBOOT\n#include "firstboot/firstboot.h"\n#endif\n'),
+        ('#define RFOUNDRY_CONFIG_H\n', '#define RFOUNDRY_CONFIG_H\n#ifndef CONFIG_P25_ENCRYPTION\n#define CONFIG_P25_ENCRYPTION 0\n#endif\n#ifndef CONFIG_P25_CHANNELS\n#define CONFIG_P25_CHANNELS 0\n#endif\n#ifndef CONFIG_P25\n#define CONFIG_P25 0\n#endif\n#ifndef CONFIG_P25_NATIVE\n#define CONFIG_P25_NATIVE 0\n#endif\n#ifndef CONFIG_P25_BENCH\n#define CONFIG_P25_BENCH 1\n#endif\n#ifndef CONFIG_DEV_UPDATE\n#define CONFIG_DEV_UPDATE 0\n#endif\n#ifndef CONFIG_DEV_TX\n#define CONFIG_DEV_TX 0\n#endif\n#ifndef CONFIG_CPU_PROFILE\n#define CONFIG_CPU_PROFILE 0\n#endif\n#ifndef CONFIG_FIRSTBOOT\n#define CONFIG_FIRSTBOOT 0\n#endif\n#if CONFIG_FIRSTBOOT\n#include "firstboot/firstboot.h"\n#endif\n'),
     ])
     transform("Makefile", [
         ("APP_DIRS := $(CORE_DIRS)", "ifeq ($(CONFIG_P25),y)\nCORE_DIRS += core/p25 core/p25/cai\nP25_LIB := core/p25/libdm32_imbe.a\nendif\nifeq ($(CONFIG_P25_NATIVE),y)\nCORE_DIRS += core/native_modem\nendif\nifeq ($(CONFIG_FIRSTBOOT),y)\nCORE_DIRS += core/firstboot\nendif\nAPP_DIRS := $(CORE_DIRS)"),
@@ -198,7 +198,10 @@ def prepare():
         ('\t\traw_keys = keys;', '\t\traw_keys = keys;\n#if CONFIG_DEV_TX\n\t\tconst keymap_entry_t *ptt = keys && !ptt_blocked ? key_for(ACT_PTT, false) : NULL;\n\t\tbool physical_down = ptt && (keys & (1u << ptt->bit));\n\t\tif (physical_down != physical_ptt) {\n\t\t\tphysical_ptt = physical_down;\n\t\t\tradio_req_physical_ptt(physical_down);\n\t\t}\n#endif'),
     ])
     transform("core/input/input.h", [("uint32_t input_raw_keys(void);", "uint32_t input_raw_keys(void);\n#if CONFIG_DEV_TX\nbool input_physical_ptt(void);\nbool input_ptt_down(void);\n#endif")])
-    transform("core/radio/radio.h", [("void radio_req_ptt(bool down);", "void radio_req_ptt(bool down);\n#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down);\n#endif")])
+    transform("core/radio/radio.h", [("void radio_req_ptt(bool down);", "void radio_req_ptt(bool down);\n#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down);\n#endif"),
+        ("TXDENY_BCAST, TXDENY_SFR_RPT,", "TXDENY_BCAST, TXDENY_SFR_RPT, TXDENY_P25_KEY,"),
+        ("uint8_t tx_deny;", "bool p25_crypto_mismatch;\n\tuint8_t tx_deny;"),
+    ])
     transform("core/radio/radio_task.c", [
         ('#include "config.h"', '#include "config.h"\n#if CONFIG_P25_NATIVE\n#include "native_modem/native_lab.h"\n#endif'),
         ('for (;;) {\n\t\tTickType_t due', 'radio_req_t req;\n    bool retained_request=false;\n\tfor (;;) {\n#if CONFIG_P25_NATIVE\n\t\tnative_lab_service(&sm,hal_micros());\n#endif\n\t\tTickType_t due'),
@@ -295,6 +298,7 @@ def prepare():
             raise SystemExit(f"Preserving unexpected local changes: {retired_license}")
         retired_license.unlink()
         OWNED.pop(key)
+    write_owned(DEST / "COPYING-P25-ENCRYPTION", (ROOT / "LICENSES/GPL-3.0-or-later.txt").read_bytes())
     write_owned(DEST / "COPYING-OPEN25", (ROOT / "LICENSE").read_bytes())
     write_owned(DEST / "COPYING-P25-CAI", (cai / "LICENSE").read_bytes())
     write_owned(DEST / "COPYING-P25-IMBE", (ROOT / "third_party/imbe/LICENSE").read_bytes())
@@ -303,6 +307,7 @@ def prepare():
         "Open25 support, RadioFoundry and the pinned CAI library use MIT notices.\n"
         "The shared fixed-point C full-rate IMBE codec and Open25 interface use MIT notices.\n"
         "Preserve source provenance and notices in third_party/imbe.\n"
+        "Encryption builds include GPL-3.0-or-later additions. See COPYING-P25-ENCRYPTION.\n"
         "See COPYING-OPEN25, COPYING-P25-CAI, COPYING-P25-IMBE and the source manifest.\n"
         "Classic supports saved conventional P25 channels; final RF qualification is incomplete.\n"
     ).encode())
@@ -332,7 +337,10 @@ def main():
     ap.add_argument("--reuse-codec", action="store_true", help="reuse codec only when inputs/compiler/archive/call graphs match checked hashes")
     ap.add_argument("--tx-bench",action="store_true",help="bounded native TX on 145.500 MHz; retains ordinary PTT/storage guards")
     ap.add_argument('--classic', action='store_true', help='Classic FM/DMR/conventional P25 release preset')
+    ap.add_argument('--p25-encryption', action='store_true', help='Include the experimental GPL P25 keyloader and ciphers')
     args = ap.parse_args()
+    if args.p25_encryption and not args.classic:
+        ap.error('--p25-encryption requires --classic')
     if args.classic:
         if args.first_boot or args.disable or args.disable_native or args.dev_update or args.tx_bench:
             ap.error('Classic is a separate normal-operation preset')
@@ -367,6 +375,9 @@ def main():
     if args.classic:
         suffix='classic'
         identity='classic-0.1.0-rc1-r8'
+        if args.p25_encryption:
+            suffix += '-encryption'
+            identity += '-encryption'
     b = f"build/dm32-p25-{suffix}"
     command = ["make", "-j8", "BOARD=dm32", f"CROSS={ROOT}/toolchain/bin/csky-elf-", f"BUILD={b}",
         "CONFIG_P25=" + ("n" if args.disable else "y"), "CONFIG_P25_NATIVE="+("y" if native else "n"), "CONFIG_DMR_IP_GATEWAY=n", "CONFIG_NET_PPP=n",
@@ -380,7 +391,8 @@ def main():
         "CONFIG_DEV_TX="+("y" if args.tx_bench or args.classic else "n"),
         "CONFIG_P25_CHANNELS="+("y" if args.classic else "n"),
         f"OPT=-Os -ffile-prefix-map={DEST}=/radiofoundry -fdebug-prefix-map={DEST}=/radiofoundry "
-        f"-DRFOUNDRY_SOURCE_EPOCH={git(UP, 'show', '-s', '--format=%ct', 'HEAD')}"]
+        f"-DRFOUNDRY_SOURCE_EPOCH={git(UP, 'show', '-s', '--format=%ct', 'HEAD')} "
+        f"-DCONFIG_P25_ENCRYPTION={int(args.p25_encryption)}"]
     if args.classic:
         command += ['CONFIG_FM=y','CONFIG_DMR=y','CONFIG_CHANNEL_EDIT=y','CONFIG_CPS_OPENFW=y',
                     'CONFIG_CPS_FAST=y','CONFIG_STUB_ENTRY=y','CONFIG_DEBUGLINK=y',
@@ -487,7 +499,7 @@ def main():
         "audits": {"unresolved_symbols": [], "high_register_instructions": 0, "compiler_warnings": 0,**firstboot_audits},
         "forced_rebuild_identical": args.verify_rebuild,
         "codec_speed_build":args.speed_codec, "bench_enabled":not args.lean, "cpu_profile_enabled":args.cpu_profile, "dev_update_enabled":args.dev_update,
-        "native_tx_bench_enabled":args.tx_bench, "classic_enabled":args.classic,
+        "native_tx_bench_enabled":args.tx_bench, "classic_enabled":args.classic, "p25_encryption_enabled":args.p25_encryption,
         "firstboot_flags":47 if args.tx_bench else 15 if args.dev_update else 31,
         "codec_slot": "recognized local stock merged separately" if args.with_local_stock else "reserved; no stock AMBE merged",
         "sources": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(inputs)},

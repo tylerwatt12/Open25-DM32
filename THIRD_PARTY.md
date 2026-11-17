@@ -3,7 +3,11 @@
 Preserve every original per-file notice and the supplied full license texts.
 Build dependency source remains available at its pinned upstream location.
 
-Project code, the P25 CAI and the selected full-rate IMBE codec use MIT notices.
+The baseline project, P25 CAI and full-rate IMBE codec retain their MIT terms.
+The opt-in encryption preset includes original GPL-3.0-or-later prototype
+components and ports thereof. Distribute that combined firmware under
+GPL-3.0-or-later and preserve the original MIT notices. The full GPL text
+is in [LICENSES/GPL-3.0-or-later.txt](LICENSES/GPL-3.0-or-later.txt).
 The former GPL IMBE implementation, wrapper and DSP patch recipe are replaced.
 Dependencies retain the terms listed below. Independent GPL/LGPL test references
 are not linked into the application firmware.

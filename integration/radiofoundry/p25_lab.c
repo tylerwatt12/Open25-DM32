@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: MIT AND GPL-3.0-or-later */
+/* Original code retains MIT terms. Encryption additions retain GPL-3.0-or-later. */
 /* Conventional P25 worker and device/audio integration. */
 #include <string.h>
 #include "p25_lab.h"
@@ -8,6 +9,10 @@
 #include "mic_condition.h"
 #include "cpu_profile.h"
 #include "config.h"
+#if CONFIG_P25_ENCRYPTION
+#include "p25_keys.h"
+#include "codeplug/codeplug.h"
+#endif
 #include "board.h"
 #include "hal_time.h"
 #include "debuglink/debuglink_proto.h"
@@ -53,6 +58,72 @@ static p25_phy_rx phy;
 static uint32_t live_sid;
 #if CONFIG_P25_CHANNELS
 static p25_call channel_call;
+#if CONFIG_P25_ENCRYPTION
+static volatile uint8_t vault_busy;
+static volatile uint8_t encrypt_enabled = 1;
+static uint8_t channel_key_slot, channel_key_algorithm;
+static volatile bool channel_mismatch_seen;
+static volatile uint32_t channel_mismatch_ms;
+
+void p25_lab_set_key_slot(uint8_t slot, uint8_t algorithm)
+{
+    channel_key_slot = slot;
+    channel_key_algorithm = algorithm;
+}
+
+int p25_lab_encryption_selected(uint8_t slot)
+{
+    return encrypt_enabled && slot && slot <= P25_KEY_SLOTS;
+}
+
+int p25_lab_encryption_on(void) { return encrypt_enabled; }
+
+int p25_lab_toggle_encryption(void)
+{
+    taskENTER_CRITICAL();
+    int ok = !vault_busy && (state != 1 || request_mode == 5);
+    if (ok) {
+        encrypt_enabled = !encrypt_enabled;
+        if (state == 1) stop_requested = 1;
+    }
+    taskEXIT_CRITICAL();
+    return ok;
+}
+
+static const p25_key_entry *active_key(uint8_t slot, uint8_t algorithm)
+{
+    static const uint8_t algids[] = {0, P25_ALG_AES256, P25_ALG_DES, P25_ALG_ADP};
+    const p25_key_entry *entry = p25_keys_get(slot);
+    return entry && algorithm < sizeof algids && (!algorithm || entry->algorithm == algids[algorithm]) ?
+        entry : NULL;
+}
+
+int p25_lab_key_ready(uint8_t slot, uint8_t algorithm)
+{
+    return !p25_lab_encryption_selected(slot) ||
+        (p25_keys_tx_ready() && active_key(slot, algorithm));
+}
+
+static void apply_crypto(void)
+{
+    voice.crypto_algorithm = 0;
+    voice.crypto_key_id = 0;
+    voice.advance_mi = NULL;
+    p25_vault_erase(voice.crypto_key, sizeof voice.crypto_key);
+    if (!p25_lab_encryption_selected(channel_key_slot)) return;
+    const p25_key_entry *entry = active_key(channel_key_slot, channel_key_algorithm);
+    if (!entry) return;
+    voice.crypto_algorithm = entry->algorithm;
+    voice.crypto_key_id = (uint16_t)(entry->kid[0] | entry->kid[1] << 8);
+    memcpy(voice.crypto_key, entry->data, sizeof voice.crypto_key);
+    voice.advance_mi = p25_keys_next_mi;
+}
+
+int p25_lab_channel_mismatch(void)
+{
+    return channel_mismatch_seen && hal_millis() - channel_mismatch_ms < 4000u;
+}
+#endif
 static uint16_t channel_rx_nac;
 static uint32_t channel_voice_ms;
 static bool channel_voice_seen;
@@ -60,7 +131,13 @@ int p25_lab_set_channel(uint16_t receive_nac,uint16_t transmit_nac,uint16_t talk
 {
     taskENTER_CRITICAL();
     int ok=state!=1;
+#if CONFIG_P25_ENCRYPTION
+    ok = ok && !vault_busy;
+#endif
     if(ok){
+#if CONFIG_P25_ENCRYPTION
+        channel_mismatch_seen = false;
+#endif
         channel_rx_nac=receive_nac;
         channel_call=(p25_call){.nac=transmit_nac,.talkgroup=talkgroup,.source_id=radio_id};
     }
@@ -83,6 +160,9 @@ int p25_lab_live_begin(uint32_t sid)
     taskENTER_CRITICAL();
     int ok=worker && state!=1 && board.native_mic_route && board.audio &&
            board.audio->start && board.audio->stop;
+#if CONFIG_P25_ENCRYPTION
+    ok = ok && !vault_busy && p25_lab_key_ready(channel_key_slot, channel_key_algorithm);
+#endif
     if (ok) {
         live_sid=sid;
         live_released=live_capturing=stop_requested=0;
@@ -105,6 +185,9 @@ int p25_lab_channel_rx(uint32_t hz)
 {
     taskENTER_CRITICAL();
     int ok=worker && state!=1;
+#if CONFIG_P25_ENCRYPTION
+    ok = ok && !vault_busy;
+#endif
     if (ok) {
         frequency=hz;
 #if CONFIG_P25_CHANNELS
@@ -158,7 +241,19 @@ static int live_run(void)
     uint8_t raw[36],queued=0;
     unsigned lead=3;
     bool kicked=false,sealed=false,closed=false;
+#if CONFIG_P25_ENCRYPTION
+    apply_crypto();
+    p25_encryption_sync sync = {.algorithm = voice.crypto_algorithm, .kid = voice.crypto_key_id};
+    bool ok;
+    if (p25_lab_encryption_selected(channel_key_slot)) {
+        ok = sync.algorithm && p25_keys_next_mi(sync.mi) &&
+             p25_voice_tx_begin_secure(&voice, &call, &sync);
+    } else {
+        ok = p25_voice_tx_begin(&voice, &call) != 0;
+    }
+#else
     bool ok=p25_voice_tx_begin(&voice,&call)!=0;
+#endif
     uint32_t sid=live_sid;
     live_mic_frames=live_peak=live_encode_max=live_encode_us=live_slow=live_encoded=0;
     live_first_us=live_last_us=live_fifo_high=live_overflows=0;
@@ -311,6 +406,9 @@ static void consume(uint32_t seq,uint8_t kind,const uint8_t raw[36])
 #if CONFIG_P25_CHANNELS
     uint32_t prior_voice=voice.rx_voice;
 #endif
+#if CONFIG_P25_ENCRYPTION
+    uint32_t prior_mismatch = voice.rx_crypto_mismatch;
+#endif
     if(p25_phy_rx_record(&phy,&voice,seq,kind,raw)) {
         gaps+=phy.gaps-prior_gaps;unsupported=phy.unsupported;
         if(unsupported)stop_requested=1;
@@ -318,6 +416,12 @@ static void consume(uint32_t seq,uint8_t kind,const uint8_t raw[36])
     }
 #if CONFIG_P25_CHANNELS
     if(voice.rx_voice!=prior_voice) { channel_voice_ms=hal_millis();channel_voice_seen=true; }
+#endif
+#if CONFIG_P25_ENCRYPTION
+    if (request_mode == 5 && voice.rx_crypto_mismatch != prior_mismatch) {
+        channel_mismatch_ms = hal_millis();
+        channel_mismatch_seen = true;
+    }
 #endif
     if(voice.rx_frames!=prior_frames) {
         taskENTER_CRITICAL();
@@ -363,6 +467,9 @@ static int receive_run(void)
     session=gaps=unsupported=0;native_state=native_reason=0;pcm_crc=sample_checks?0xffffffffu:0;
     memset(&phy,0,sizeof phy);p25_audio_fifo_reset(&fifo);
     p25_voice_init(&voice,nac,group,sink,NULL);voice.micros=sample_checks?hal_micros:NULL;
+#if CONFIG_P25_ENCRYPTION
+    if (request_mode == 5) apply_crypto();
+#endif
     int ok=1;
 #if CONFIG_P25_NATIVE
     /* Playback also borrows native RX ownership to exclude normal beeps/PTT and
@@ -456,11 +563,45 @@ static int receive_run(void)
     if(sample_checks)pcm_crc^=0xffffffffu;
     return ok && !fifo.overflows && !unsupported;
 }
+#if CONFIG_P25_ENCRYPTION
+static void pin_yield(void) { vTaskDelay(1); }
+
+int p25_lab_pin_prepare(void)
+{
+    taskENTER_CRITICAL();
+    int ok = state != 1 && !vault_busy;
+    if (ok) vault_busy = 1;
+    taskEXIT_CRITICAL();
+    if (ok) {
+        p25_keys_pin_prepare();
+        vault_busy = 0;
+    }
+    return ok;
+}
+
+int p25_lab_pin_submit(const char *pin, size_t len)
+{
+    taskENTER_CRITICAL();
+    int ok = worker && state != 1 && !vault_busy && p25_keys_pin_submit(pin, len);
+    if (ok) vault_busy = 1;
+    taskEXIT_CRITICAL();
+    if (ok) xTaskNotifyGive(worker);
+    return ok;
+}
+#endif
+
 static void run(void *ctx)
 {
     (void)ctx;
     for(;;) {
         ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+#if CONFIG_P25_ENCRYPTION
+        if (p25_keys_pin_status() == P25_PIN_WORKING) {
+            p25_keys_pin_run(pin_yield);
+            vault_busy = 0;
+            continue;
+        }
+#endif
         int ok;
 #if CONFIG_P25_BENCH || CONFIG_DEV_TX
         if(request_mode==1) {
@@ -493,6 +634,22 @@ size_t p25_lab_command(const uint8_t *req,uint16_t len,uint8_t *out,size_t cap)
     if(!cap)return 0;
     out[0]=DL_ST_BAD_ARG;
     if(!req || !len)return 1;
+#if CONFIG_P25_ENCRYPTION
+    if (req[0] >= 17 && req[0] <= 24) {
+        taskENTER_CRITICAL();
+        int busy = state == 1 || vault_busy;
+        if (!busy) vault_busy = 1;
+        taskEXIT_CRITICAL();
+        if (busy) { out[0] = DL_ST_BUSY; return 1; }
+        int count = p25_keys_command(req, len, out, cap);
+        if (req[0] == 22 && out[0] == DL_ST_OK) {
+            p25_vault_erase(voice.crypto_key, sizeof voice.crypto_key);
+            p25_vault_erase(voice.crypto_stream, sizeof voice.crypto_stream);
+        }
+        vault_busy = 0;
+        return (size_t)count;
+    }
+#endif
 #if CONFIG_P25_CHANNELS
     /* Saved channels and normal PTT own operation; diagnostics are read-only. */
     if(req[0]!=0 && req[0]!=7 && req[0]!=10 && req[0]!=11 && req[0]!=13) {
@@ -567,6 +724,9 @@ size_t p25_lab_command(const uint8_t *req,uint16_t len,uint8_t *out,size_t cap)
 #endif
     taskENTER_CRITICAL();
     int busy=state==1;
+#if CONFIG_P25_ENCRYPTION
+    busy=busy || vault_busy;
+#endif
 #if CONFIG_P25_NATIVE
     busy=busy || native_lab_reserved();
 #endif
