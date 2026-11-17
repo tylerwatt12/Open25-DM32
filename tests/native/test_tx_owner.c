@@ -7,7 +7,7 @@
 static bool update_active;
 static unsigned live_press,live_release;
 static uint32_t local_sid, rx_sid;
-int p25_lab_live_begin(uint32_t sid) { local_sid=sid;live_press++;return 1; }
+int p25_lab_live_begin(uint32_t sid, const char *alias) { (void)alias; local_sid=sid;live_press++;return 1; }
 int p25_lab_channel_rx(uint32_t hz) { rx_sid=native_lab_voice_start(hz,0);return rx_sid!=0; }
 void p25_lab_live_up(void) { live_release++; }
 bool firstboot_update_busy(void) { return update_active; }

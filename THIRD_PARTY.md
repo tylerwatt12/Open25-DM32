@@ -14,7 +14,7 @@ are not linked into the application firmware.
 | FreeRTOS-Kernel | RadioFoundry submodule — `3a22924e0a9ddbbc8b0758881c33b3422a5cc20d` | MIT, original notices retained. |
 | Full-rate IMBE | Shared Open25 fixed-point C core in `third_party/imbe`; exact revision/files in `sources.lock.json` | MIT for the independently expressed code. Numeric standard datasets and generated constants are identified in its source provenance. |
 | mbelib | `sources.lock.json` | ISC; notice in `LICENSES/mbelib-ISC.txt`. Independent host reference, not the embedded codec. |
-| P25 CAI | `third_party/p25cai`, revision in `sources.lock.json` | MIT; full notice in `third_party/p25cai/LICENSE`. Conventional caller bindings in `src/p25/p25.c` and `p25.h` use the same pinned source. |
+| P25 CAI | `third_party/p25cai`, revision in `sources.lock.json` | MIT; full notice in `third_party/p25cai/LICENSE`. The local caller bindings in `src/p25/p25.c` and `p25.h` use this pinned library and add the User Alias link-control format. |
 | OP25 | `sources.lock.json` | GPL/LGPL host regression references; original notices retained with the downloaded dependency. |
 | newlib | `tools/bootstrap_newlib.sh` | Pinned source hash; original per-file terms and upstream COPYING.NEWLIB apply. |
 | GNU binutils, GCC and libgcc | `sources.lock.json`, `tools/bootstrap_toolchain.sh` | Original GPL/LGPL terms and applicable GCC Runtime Library Exception apply. |

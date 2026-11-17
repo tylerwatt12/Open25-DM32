@@ -148,3 +148,11 @@ handler, formatter and feature list for disabled, lab-only and Classic builds.
 It checks the returned capability tokens and RFKV programming markers. The
 matching CPS regression parses the same C handler response and checks the form
 and table mode choices without relying on an existing P25 channel.
+
+## Conventional P25 User Alias
+
+Enable **Send talker alias** on a P25 channel to send the configured **Radio
+name** on clear group calls. The radio uses Phase 1 User Alias link control
+words (TIA-102.AABF-D-2 sections 7.3.35–36). On receive, **Show talker alias**
+shows the complete alias, then falls back to a saved private contact or the
+source unit ID. A short transmission can finish before both fragments arrive.

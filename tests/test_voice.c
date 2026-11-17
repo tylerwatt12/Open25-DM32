@@ -48,6 +48,48 @@ static void check_frame(const uint8_t *data, size_t n, unsigned duid)
     assert(!p25_decode_frame(data, n, &d));
     assert(d.nid.nac == call.nac && d.nid.duid == duid && d.metadata_valid);
 }
+static void user_alias(void)
+{
+    enum { LDUS = 5 };
+    const char name[] = "M0ABC CONTROL";
+    uint8_t air[P25_HDU_BYTES + LDUS * P25_LDU_BYTES];
+    size_t written = 0;
+    reset(call.nac, call.talkgroup);
+    assert(p25_voice_tx_begin(&v, &call));
+    p25_voice_set_alias(&v, name);
+    for (unsigned ldu = 0; ldu < LDUS; ++ldu) {
+        for (unsigned frame = 0; frame < 9; ++frame) pcm(frame);
+        uint8_t dibits[4 * (P25_HDU_BYTES + P25_LDU_BYTES)];
+        size_t expected = 4 * (P25_LDU_BYTES + (ldu == 0 ? P25_HDU_BYTES : 0));
+        size_t count = p25_voice_tx_read(&v, dibits, expected);
+        assert(count == expected);
+        for (size_t i = 0; i < count; i += 4)
+            air[written++] = (uint8_t)(dibits[i] << 6 | dibits[i+1] << 4 | dibits[i+2] << 2 | dibits[i+3]);
+    }
+    assert(written == sizeof air);
+    size_t second = sizeof air - P25_LDU_BYTES;
+    p25_decoded decoded;
+    assert(!p25_decode_frame(air + second, P25_LDU_BYTES, &decoded));
+    assert(decoded.metadata_valid && decoded.manufacturer_id == 0xa4 && decoded.link_control_format == 51);
+    assert(!memcmp(decoded.message_indicator, name + 7, 7));
+
+    reset(call.nac, call.talkgroup);
+    feed(air, second);
+    assert(!v.heard_alias[0] && v.rx_voice == 36);
+    feed(air + second, P25_LDU_BYTES);
+    assert(!strcmp(v.heard_alias, name) && v.rx_voice == 45 && !v.rx_muted);
+    uint8_t terminator[P25_TDU_BYTES];
+    assert(!p25_encode_tdu(&call, terminator));
+    feed(terminator, sizeof terminator);
+    assert(!v.heard_alias[0]);
+
+    reset(call.nac, call.talkgroup + 1);
+    feed(air, sizeof air);
+    assert(!v.heard_alias[0] && !v.rx_voice);
+    reset(call.nac, call.talkgroup);
+    feed(air + second, P25_LDU_BYTES);
+    assert(!v.heard_alias[0] && !v.rx_voice);
+}
 static void short_call(void)
 {
     uint8_t air[333], d[1];
@@ -327,7 +369,7 @@ int main(void)
     printf("selftest ok=%u air=%u blocks=%u pcm_crc=%08x nonzero=%u session_bytes=%u\n",
             r.ok, r.air_bytes, r.pcm_blocks, r.pcm_crc, r.nonzero_samples, r.session_bytes);
     assert(r.ok);
-    short_call(); paced_call(); encoder_tail(); faults(); high_unit_id(); layout();
+    short_call(); user_alias(); paced_call(); encoder_tail(); faults(); high_unit_id(); layout();
     puts("PASS conventional voice lifecycle, pacing, admission, underrun, overflow, PHY layouts and loss");
     return 0;
 }

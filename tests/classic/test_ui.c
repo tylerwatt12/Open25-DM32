@@ -83,6 +83,7 @@ int main(void)
         {"Classic P25 NAC", P25_TG "down", "ok enc+ enc+ ok", "shows=$493", 4, false},
         {"Classic P25 hexadecimal NAC", P25_TG "down", "ok enc- enc- enc- ok", "shows=$F93", 5, false},
         {"Classic P25 ID", P25_TG "down down down", "ok 3 1 0 1 2 3 4 ok", "shows=3101234", 9, false},
+        {"Classic P25 alias switch", P25_TG "down down down down", "ok long:ok", "writes=1 toast=Saved", 2, true},
         {"Classic split TX", P25_TG "down down", "ok 4 5 6 ok", "shows=$456", 5, false},
         {"Classic inherited TX unchanged", P25_TG "down down", "ok ok", "shows=Same_as_RX", 2, false},
         {"Classic explicit TX independent", P25_TG "down down", "ok 2 9 3 ok up ok 4 5 6 ok down", "shows=$293", 12, false},
@@ -102,6 +103,20 @@ int main(void)
     strcpy(result.text,"Couldn't write the codeplug: not saved");
     if(!ui_notify(&result) || !sim_run("wait:1 expect:toast=Couldn't_write",error,sizeof error)) {
         puts("FAIL Classic Start new failure event"); fails++;
+    }
+    sim_reset(sim_geom_find("240x320i10x5"), SIM_MAP_K);
+    radio_view_t *v = (radio_view_t *)sim_view();
+    v->ch.mode = RADIO_MODE_P25;
+    v->p25_source = 1234567;
+    strcpy(v->p25_contact, "Saved caller");
+    if (!sim_run("fmrx expect:shows=Saved_caller", error, sizeof error)) {
+        printf("FAIL P25 contact fallback: %s\n", error);
+        fails++;
+    }
+    strcpy(v->p25_alias, "M0ABC");
+    if (!sim_run("fmrx expect:shows=M0ABC expect:hides=Saved_caller", error, sizeof error)) {
+        printf("FAIL P25 over-the-air alias: %s\n", error);
+        fails++;
     }
     rx_defaults_and_confirmation();
     printf("Classic P25 editor: %d flows, %d failures\n",flows_run,fails);

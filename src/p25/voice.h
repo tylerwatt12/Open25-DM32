@@ -32,6 +32,10 @@ typedef struct {
     uint8_t head, tail, count, voice_count, next_duid, flush_remaining;
     uint8_t transmitting, started, stopping, terminator_pending, fault;
     uint8_t crypto_clear, have_group;
+    uint32_t last_voice_end, alias_part_end;
+    char heard_alias[P25_ALIAS_LENGTH + 1], alias_part[P25_ALIAS_FRAGMENT];
+    char send_alias[P25_ALIAS_LENGTH];
+    uint8_t alias_opcode, alias_step;
     uint32_t rx_frames, rx_voice, rx_muted, rx_erasures, tx_frames, tx_underruns;
     uint32_t (*micros)(void); /* optional task-level profiling, no clock assumption */
     uint32_t fec_max_us, imbe_max_us;
@@ -44,6 +48,7 @@ void p25_voice_init(p25_voice *v, uint16_t nac, uint16_t group,
 void p25_voice_rx_reset(p25_voice *v);
 void p25_voice_rx_dibit(p25_voice *v, uint8_t dibit);
 int p25_voice_tx_begin(p25_voice *v, const p25_call *call);
+void p25_voice_set_alias(p25_voice *v, const char *name);
 /* Exactly one 8 kHz / 20 ms microphone block; mutable for the codec.
  * Returns 0 on invalid state, codec failure or queue overflow. Abort/unkey.
  * Producer must be paced by microphone time, not called in an unbounded loop. */

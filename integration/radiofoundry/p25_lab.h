@@ -7,7 +7,7 @@ void p25_lab_start(void);
 int p25_lab_busy(void);
 size_t p25_lab_command(const uint8_t *req, uint16_t len, uint8_t *out, size_t cap);
 #if defined(CONFIG_DEV_TX) && CONFIG_DEV_TX
-int p25_lab_live_begin(uint32_t session);
+int p25_lab_live_begin(uint32_t session, const char *radio_name);
 int p25_lab_channel_rx(uint32_t frequency_hz);
 void p25_lab_live_up(void);
 /* Native RF-switch edge, ISR-safe; only marks the corresponding mic block. */
@@ -16,6 +16,7 @@ void p25_lab_live_key(void);
 /* Worker input snapshot; changed only after the previous worker has stopped. */
 int p25_lab_set_channel(uint16_t rx_nac, uint16_t tx_nac, uint16_t talkgroup, uint32_t radio_id, int selective);
 void p25_lab_channel_stop(void);
+uint32_t p25_lab_channel_caller(char *alias, size_t capacity);
 int p25_lab_channel_receiving(void);
 #endif
 #endif

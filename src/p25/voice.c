@@ -2,12 +2,46 @@
 #include "voice.h"
 #include "p25_runtime.h"
 
+static void forget_alias(p25_voice *v)
+{
+    v->heard_alias[0] = 0;
+    v->alias_opcode = 0;
+}
+
+/* Both parts carry text only. Bind them to contiguous, admitted voice. */
+static void alias_fragment(p25_voice *v, const p25_decoded *d)
+{
+    unsigned fragment = d->link_control_format - P25_ALIAS_FIRST;
+    if (!(fragment & 1u)) {
+        memcpy(v->alias_part, d->message_indicator, P25_ALIAS_FRAGMENT);
+        v->alias_part_end = v->framer.symbols_seen;
+        v->alias_opcode = d->link_control_format;
+        return;
+    }
+    unsigned first = v->alias_opcode;
+    v->alias_opcode = 0;
+    if (first + 1 != d->link_control_format ||
+        v->framer.symbols_seen - v->alias_part_end > 4u * P25_LDU_BYTES * 4u) return;
+
+    char text[P25_ALIAS_LENGTH + 1] = {0};
+    for (unsigned i = 0; i < P25_ALIAS_LENGTH; ++i) {
+        unsigned char c = i < P25_ALIAS_FRAGMENT ? (unsigned char)v->alias_part[i] :
+            d->message_indicator[i - P25_ALIAS_FRAGMENT];
+        if (!c) break;
+        if (c < 32 || c > 126) return;
+        text[i] = (char)c;
+    }
+    if (text[0]) memcpy(v->heard_alias, text, sizeof text);
+}
+
 static void admission_reset(p25_voice *v)
 {
     v->crypto_clear = v->have_group = 0;
     v->active_nac = P25_NAC_ANY;
     v->active_group = 0;
     v->active_source = 0;
+    v->last_voice_end = 0;
+    forget_alias(v);
     dm32_imbe_init(&v->codec);
 }
 
@@ -51,19 +85,27 @@ void p25_voice_rx_dibit(p25_voice *v, uint8_t dibit)
         admission_reset(v);
         return;
     }
-    if (!d.metadata_valid || (d.nid.duid == P25_DUID_HDU && d.manufacturer_id > 1)) {
+    int is_alias = d.metadata_valid && d.nid.duid == P25_DUID_LDU1 &&
+        p25_alias_opcode(d.manufacturer_id, d.link_control_format);
+    int continuous = v->framer.symbols_seen - v->last_voice_end == P25_LDU_BYTES * 4u;
+    if (!continuous) forget_alias(v);
+    if (!d.metadata_valid || (is_alias && !continuous) ||
+        (d.nid.duid == P25_DUID_HDU && d.manufacturer_id > 1)) {
         /* Do not reuse permission from a previous good header over damage. */
         v->crypto_clear = v->have_group = 0;
+        forget_alias(v);
     } else if (d.nid.duid == P25_DUID_HDU) {
         admission_reset(v);
         v->active_nac = d.nid.nac;
         v->crypto_clear = d.clear_voice;
         v->active_group = d.talkgroup;
         v->have_group = d.talkgroup != 0;
-    } else if (d.nid.duid == P25_DUID_LDU1) {
+    } else if (d.nid.duid == P25_DUID_LDU1 && !is_alias) {
         if ((v->have_group && v->active_group != d.talkgroup) ||
-            (v->active_source && v->active_source != d.source_id))
+            (v->active_source && v->active_source != d.source_id)) {
             v->crypto_clear = 0;
+            forget_alias(v);
+        }
         v->active_group = d.talkgroup;
         v->active_source = d.source_id;
         v->have_group = d.talkgroup && d.source_id && d.source_id <= 0xFFFFFEu;
@@ -76,6 +118,8 @@ void p25_voice_rx_dibit(p25_voice *v, uint8_t dibit)
     if (d.nid.duid != P25_DUID_LDU1 && d.nid.duid != P25_DUID_LDU2) return;
     int admitted = v->crypto_clear && v->have_group &&
         (!v->group_filter || v->active_group == v->group_filter || v->active_group == 0xffff);
+    v->last_voice_end = v->framer.symbols_seen;
+    if (admitted && is_alias && v->active_source) alias_fragment(v, &d);
     for (unsigned i = 0; i < 9; i++) {
         int16_t pcm[160] = {0};
         if (!admitted) v->rx_muted++;
@@ -134,9 +178,20 @@ int p25_voice_tx_begin(p25_voice *v, const p25_call *call)
     if (p25_encode_hdu(call, v->queue[0].data)) return 0;
     v->call = *call;
     v->transmitting = 1;
+    v->send_alias[0] = 0;
+    v->alias_step = 0;
     v->next_duid = P25_DUID_LDU1;
     commit_packet(v, P25_HDU_BYTES);
     return 1;
+}
+
+void p25_voice_set_alias(p25_voice *v, const char *name)
+{
+    memset(v->send_alias, 0, sizeof v->send_alias);
+    for (unsigned i = 0; name && i < sizeof v->send_alias && name[i]; ++i) {
+        unsigned char c = (unsigned char)name[i];
+        v->send_alias[i] = c >= 32 && c <= 126 ? (char)c : ' ';
+    }
 }
 
 static int encode_frame(p25_voice *v, int16_t pcm[160])
@@ -145,7 +200,18 @@ static int encode_frame(p25_voice *v, int16_t pcm[160])
     if (++v->voice_count < 9) return 1;
     p25_voice_packet *p = next_packet(v);
     const uint8_t lsd[2] = {0, 0};
-    if (!p || p25_encode_ldu(&v->call, v->next_duid, v->voice, lsd, p->data)) return fail(v);
+    if (!p) return fail(v);
+    unsigned step = v->alias_step;
+    unsigned fragment = step % 3;
+    int rc;
+    if (v->send_alias[0] && v->next_duid == P25_DUID_LDU1 && fragment) {
+        unsigned opcode = P25_ALIAS_FIRST + (step / 3) * 2 + fragment - 1;
+        rc = p25_encode_alias_ldu(&v->call, v->voice, (uint8_t)opcode,
+                                  v->send_alias + (fragment - 1) * P25_ALIAS_FRAGMENT, p->data);
+    } else rc = p25_encode_ldu(&v->call, v->next_duid, v->voice, lsd, p->data);
+    if (rc) return fail(v);
+    /* Voice-channel-user LC precedes each pair. Repeat with alternating parity. */
+    if (v->next_duid == P25_DUID_LDU1) v->alias_step = (uint8_t)((step + 1) % 6);
     commit_packet(v, P25_LDU_BYTES);
     v->voice_count = 0;
     v->next_duid ^= P25_DUID_LDU1 ^ P25_DUID_LDU2;

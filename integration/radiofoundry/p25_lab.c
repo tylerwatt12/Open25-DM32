@@ -57,6 +57,8 @@ static uint16_t channel_rx_nac;
 static uint8_t channel_selective;
 static uint32_t channel_voice_ms;
 static bool channel_voice_seen;
+static uint32_t channel_source;
+static char channel_alias[P25_ALIAS_LENGTH + 1];
 int p25_lab_set_channel(uint16_t receive_nac,uint16_t transmit_nac,uint16_t talkgroup,uint32_t radio_id,int selective)
 {
     taskENTER_CRITICAL();
@@ -69,8 +71,33 @@ int p25_lab_set_channel(uint16_t receive_nac,uint16_t transmit_nac,uint16_t talk
     return ok;
 }
 void p25_lab_channel_stop(void) { stop_requested=1; }
+static bool channel_rx_current(void)
+{
+    return state == 1 && request_mode == 5 && channel_voice_seen &&
+        hal_millis() - channel_voice_ms < 650u;
+}
+
+uint32_t p25_lab_channel_caller(char *alias, size_t capacity)
+{
+    taskENTER_CRITICAL();
+    uint32_t source = channel_rx_current() ? channel_source : 0;
+    if (capacity) {
+        size_t count = capacity - 1 < P25_ALIAS_LENGTH ? capacity - 1 : P25_ALIAS_LENGTH;
+        if (source) {
+            memcpy(alias, channel_alias, count);
+            alias[count] = 0;
+        } else alias[0] = 0;
+    }
+    taskEXIT_CRITICAL();
+    return source;
+}
 int p25_lab_channel_receiving(void)
-{ return state==1 && request_mode==5 && channel_voice_seen && (uint32_t)(hal_millis()-channel_voice_ms)<650u; }
+{
+    taskENTER_CRITICAL();
+    bool active = channel_rx_current();
+    taskEXIT_CRITICAL();
+    return active;
+}
 #endif
 static volatile uint8_t live_released,live_capturing;
 static volatile uint32_t live_key_frame;
@@ -79,12 +106,17 @@ static uint32_t live_first_us,live_last_us,live_encoded;
 static uint16_t live_fifo_high;
 static uint32_t live_overflows;
 
-int p25_lab_live_begin(uint32_t sid)
+static char live_alias[P25_ALIAS_LENGTH + 1];
+int p25_lab_live_begin(uint32_t sid, const char *radio_name)
 {
     taskENTER_CRITICAL();
     int ok=worker && state!=1 && board.native_mic_route && board.audio &&
            board.audio->start && board.audio->stop;
     if (ok) {
+        size_t i = 0;
+        for (; radio_name && i < P25_ALIAS_LENGTH && radio_name[i]; ++i)
+            live_alias[i] = radio_name[i];
+        live_alias[i] = 0;
         live_sid=sid;
         live_released=live_capturing=stop_requested=0;
         request_mode=4;
@@ -110,7 +142,7 @@ int p25_lab_channel_rx(uint32_t hz)
         frequency=hz;
 #if CONFIG_P25_CHANNELS
         nac=channel_rx_nac==0xF7Eu?P25_NAC_ANY:channel_rx_nac;
-        group=channel_selective?channel_call.talkgroup:0;channel_voice_seen=false;
+        group=channel_selective?channel_call.talkgroup:0;channel_source=0;channel_voice_seen=false;
 #else
         nac=0x293;group=1;
 #endif
@@ -160,6 +192,7 @@ static int live_run(void)
     unsigned lead=3;
     bool kicked=false,sealed=false,closed=false;
     bool ok=p25_voice_tx_begin(&voice,&call)!=0;
+    if (ok) p25_voice_set_alias(&voice, live_alias);
     uint32_t sid=live_sid;
     live_mic_frames=live_peak=live_encode_max=live_encode_us=live_slow=live_encoded=0;
     live_first_us=live_last_us=live_fifo_high=live_overflows=0;
@@ -318,7 +351,14 @@ static void consume(uint32_t seq,uint8_t kind,const uint8_t raw[36])
         taskENTER_CRITICAL();fifo.head=fifo.tail=fifo.count=fifo.playing=0;taskEXIT_CRITICAL();
     }
 #if CONFIG_P25_CHANNELS
-    if(voice.rx_voice!=prior_voice) { channel_voice_ms=hal_millis();channel_voice_seen=true; }
+    if (voice.rx_voice != prior_voice) {
+        taskENTER_CRITICAL();
+        channel_voice_ms = hal_millis();
+        channel_voice_seen = true;
+        channel_source = voice.active_source;
+        memcpy(channel_alias, voice.heard_alias, sizeof channel_alias);
+        taskEXIT_CRITICAL();
+    }
 #endif
     if(voice.rx_frames!=prior_frames) {
         taskENTER_CRITICAL();

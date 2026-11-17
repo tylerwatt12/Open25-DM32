@@ -164,6 +164,11 @@ int main(void)
     CHECK(back.mode==RADIO_MODE_P25 && back.p25_squelch==1 && back.p25_nac==0xABC && back.p25_tg==65535);
     CHECK(back.p25_id==9999999 && back.power==8 && back.rx_hz==p.rx_hz && back.tx_hz==p.tx_hz);
     CHECK(!back.roam && !back.dmo && !back.vox);
+    CHECK(!back.alias_tx);
+    p.alias_tx = CODEPLUG_ALIAS_TS1_TEXT;
+    CHECK(codeplug_set_channel(9, &p));
+    CHECK(codeplug_init() == CODEPLUG_OPENFW);
+    CHECK(codeplug_channel(9, &back) && back.alias_tx == CODEPLUG_ALIAS_TS1_TEXT);
     uint8_t r[CODEPLUG_OPENFW_CHANNEL_SIZE];memset(r,0xFF,sizeof r);
     codeplug_openfw_encode(&p,r);
     CHECK(r[0x18]==1 && (r[0x33]&4)); /* harmless upstream base record */

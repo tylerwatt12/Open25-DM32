@@ -63,10 +63,6 @@
         "tests/test_open25.c": "fefcddb998d082c5251e1bf385f07653ef99613694c883b767e7603d69d9383b",
         "tests/test_packet.c": "b1fe7fd75471f890bba3548317e3b2b26afdc6f06d05391bb6b3f1c7e312d01b",
         "tools/generate_golay.py": "2742a89e4f312aa5cbedc1844990738a16c2bc26588667cd4198514ad9a16e4d"
-      },
-      "copies": {
-        "compat/open25/p25.c": "src/p25/p25.c",
-        "compat/open25/p25.h": "src/p25/p25.h"
       }
     },
     {

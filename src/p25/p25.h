@@ -36,6 +36,12 @@ size_t p25_frame_bytes(uint8_t duid);
 int p25_encode_hdu(const p25_call *call, uint8_t out[99]);
 int p25_encode_ldu(const p25_call *call, uint8_t duid,
                    const uint16_t imbe[9][8], const uint8_t low_speed[2], uint8_t out[216]);
+/* TIA-102.AABF-D-2 sections 7.3.35–36. */
+enum { P25_ALIAS_LENGTH = 14, P25_ALIAS_FRAGMENT = 7,
+       P25_ALIAS_MFID = 0xa4, P25_ALIAS_FIRST = 50, P25_ALIAS_LAST = 53 };
+int p25_alias_opcode(uint8_t manufacturer, uint8_t format);
+int p25_encode_alias_ldu(const p25_call *call, const uint16_t imbe[9][8],
+                         uint8_t opcode, const char fragment[7], uint8_t out[216]);
 int p25_encode_tdu(const p25_call *call, uint8_t out[18]);
 int p25_encode_tdulc(const p25_call *call, uint8_t out[54]);
 int p25_decode_frame(const uint8_t *air, size_t bytes, p25_decoded *result);

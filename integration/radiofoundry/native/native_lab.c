@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "native_lab.h"
+#include <string.h>
 #include "board.h"
 #include "hal_time.h"
 #include "p25/p25_lab.h"
@@ -22,9 +23,27 @@ static uint8_t channel_denial;
 static uint32_t channel_tx_ms;
 static void channel_view(radio_sm_t *sm)
 {
+    char alias[sizeof sm->view.p25_alias];
+    uint32_t source = p25_lab_channel_caller(alias, sizeof alias);
     radio_state_t state=channel_denial && sm->ptt ? RS_TX_DENIED :
         live_owner() && (test.state==NT_ARMED || test.state==NT_TX || test.state==NT_DRAIN) ? RS_TX :
-        p25_lab_channel_receiving() ? RS_RX : RS_IDLE;
+        (source || p25_lab_channel_receiving()) ? RS_RX : RS_IDLE;
+    if (state != RS_RX) {
+        alias[0] = 0;
+        source = 0;
+    }
+    if (sm->view.p25_source != source) {
+        contact_t contact;
+        sm->view.p25_source = source;
+        sm->view.p25_contact[0] = 0;
+        if (source && codeplug_contact_find(source, false, &contact))
+            memcpy(sm->view.p25_contact, contact.name, sizeof contact.name);
+        sm->serial++;
+    }
+    if (strcmp(sm->view.p25_alias, alias)) {
+        strcpy(sm->view.p25_alias, alias);
+        sm->serial++;
+    }
     if(sm->view.state!=state || sm->view.tx_deny!=channel_denial){
         sm->view.state=state;sm->view.tx_deny=channel_denial;sm->serial++;
     }
@@ -162,7 +181,12 @@ static void live_next(radio_sm_t *sm)
         test.config.power=sm->view.power;voice_owner=sid=test.session;
     }
     taskEXIT_CRITICAL();
-    if (sid && (!eligible(sm) || !p25_lab_live_begin(sid))) {
+    const char *alias = NULL;
+#if CONFIG_P25_CHANNELS
+    if (channel_selected && (sm->view.ch.alias_tx & CODEPLUG_ALIAS_TS1_TEXT))
+        alias = sm->radio_name;
+#endif
+    if (sid && (!eligible(sm) || !p25_lab_live_begin(sid, alias))) {
         deny(sid);
         native_lab_voice_release(sid);
     }

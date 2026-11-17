@@ -15,9 +15,14 @@ int p25_lab_set_channel(uint16_t n,uint16_t tx,uint16_t t,uint32_t i)
 { CHECK(n==0x293 && tx==0x293 && t==42 && i==3101234);return !classic_busy; }
 void p25_lab_channel_stop(void) { classic_stop=true; }
 int p25_lab_channel_receiving(void) { return classic_receiving; }
+uint32_t p25_lab_channel_caller(char *alias, size_t capacity)
+{
+    if (capacity) alias[0] = 0;
+    return classic_receiving ? 1234567u : 0;
+}
 int p25_lab_channel_rx(uint32_t hz)
 { classic_sid=native_lab_voice_start(hz,0);classic_busy=classic_sid!=0;classic_stop=false;return classic_busy; }
-int p25_lab_live_begin(uint32_t sid) { classic_sid=sid;classic_busy=true;classic_stop=false;return true; }
+int p25_lab_live_begin(uint32_t sid, const char *alias) { (void)alias; classic_sid=sid;classic_busy=true;classic_stop=false;return true; }
 void p25_lab_live_up(void) { if(classic_live && classic_live->config.mode==NT_TRANSMIT)classic_stop=true; }
 static int classic_start(void *ctx,nt_test *t)
 { (void)ctx;classic_live=t;classic_starts++;return true; }

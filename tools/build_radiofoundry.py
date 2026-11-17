@@ -411,7 +411,9 @@ def prepare():
         ('\t\traw_keys = keys;', '\t\traw_keys = keys;\n#if CONFIG_DEV_TX\n\t\tconst keymap_entry_t *ptt = keys && !ptt_blocked ? key_for(ACT_PTT, false) : NULL;\n\t\tbool physical_down = ptt && (keys & (1u << ptt->bit));\n\t\tif (physical_down != physical_ptt) {\n\t\t\tphysical_ptt = physical_down;\n\t\t\tradio_req_physical_ptt(physical_down);\n\t\t}\n#endif'),
     ])
     transform("core/input/input.h", [("uint32_t input_raw_keys(void);", "uint32_t input_raw_keys(void);\n#if CONFIG_DEV_TX\nbool input_physical_ptt(void);\nbool input_ptt_down(void);\n#endif")])
-    transform("core/radio/radio.h", [("void radio_req_ptt(bool down);", "void radio_req_ptt(bool down);\n#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down);\n#endif")])
+    transform("core/radio/radio.h", [
+        ("uint8_t tx_deny;", "#if CONFIG_P25_CHANNELS\n\tuint32_t p25_source;\n\tchar p25_alias[CODEPLUG_NAME_LEN + 1], p25_contact[CODEPLUG_NAME_LEN + 1];\n#endif\n\tuint8_t tx_deny;"),
+        ("void radio_req_ptt(bool down);", "void radio_req_ptt(bool down);\n#if CONFIG_DEV_TX\nvoid radio_req_physical_ptt(bool down);\n#endif")])
     transform("core/radio/radio_task.c", [
         ('#include "config.h"', '#include "config.h"\n#if CONFIG_P25_NATIVE\n#include "native_modem/native_lab.h"\n#endif'),
         ('for (;;) {\n\t\tTickType_t due', 'radio_req_t req;\n    bool retained_request=false;\n\tfor (;;) {\n#if CONFIG_P25_NATIVE\n#if CONFIG_P25_CHANNELS\n        /* Saved edits use the existing retained receiver handoff. */\n        if (!retained_request && !sm.ptt && sm.view.state!=RS_TX &&\n            native_lab_owns() && codeplug_serial()!=sm.codeplug_serial) {\n            req=(radio_req_t){.type=RREQ_RELOAD};\n            retained_request=true;\n        }\n#endif\n\t\tnative_lab_service(&sm,hal_micros());\n#endif\n\t\tTickType_t due'),

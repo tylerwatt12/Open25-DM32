@@ -34,7 +34,7 @@ int p25_nid_decode(uint64_t word, p25_nid *result)
 size_t p25_frame_bytes(uint8_t duid) { return p25cai_frame_size(duid); }
 
 static int encode(const p25_call *call, uint8_t duid, const uint16_t imbe[9][8],
-                   const uint8_t *lsd, uint8_t *out)
+                   const uint8_t *lsd, const uint8_t *alias_lc, uint8_t *out)
 {
     if (!call_valid(call) || !out) return -1;
     p25cai_frame frame = {0};
@@ -48,6 +48,7 @@ static int encode(const p25_call *call, uint8_t duid, const uint16_t imbe[9][8],
         header.group = call->talkgroup;
         if (p25cai_header_encode(&header,frame.metadata)) return -1;
     } else if (duid == P25_DUID_LDU2) frame.metadata[9] = 0x80;
+    else if (alias_lc) memcpy(frame.metadata, alias_lc, 9);
     else if (duid != P25_DUID_TDU) {
         p25cai_link_control lc = {0};
         lc.source = call->source_id;
@@ -71,16 +72,30 @@ static int encode(const p25_call *call, uint8_t duid, const uint16_t imbe[9][8],
 }
 
 int p25_encode_hdu(const p25_call *call, uint8_t out[99])
-{ return encode(call,P25_DUID_HDU,NULL,NULL,out); }
+{ return encode(call,P25_DUID_HDU,NULL,NULL,NULL,out); }
 int p25_encode_tdu(const p25_call *call, uint8_t out[18])
-{ return encode(call,P25_DUID_TDU,NULL,NULL,out); }
+{ return encode(call,P25_DUID_TDU,NULL,NULL,NULL,out); }
 int p25_encode_tdulc(const p25_call *call, uint8_t out[54])
-{ return encode(call,P25_DUID_TDULC,NULL,NULL,out); }
+{ return encode(call,P25_DUID_TDULC,NULL,NULL,NULL,out); }
 int p25_encode_ldu(const p25_call *call, uint8_t duid,
                    const uint16_t imbe[9][8], const uint8_t low_speed[2], uint8_t out[216])
 {
     if (duid != P25_DUID_LDU1 && duid != P25_DUID_LDU2) return -1;
-    return encode(call,duid,imbe,low_speed,out);
+    return encode(call,duid,imbe,low_speed,NULL,out);
+}
+
+int p25_alias_opcode(uint8_t manufacturer, uint8_t format)
+{
+    return manufacturer == P25_ALIAS_MFID && format >= P25_ALIAS_FIRST && format <= P25_ALIAS_LAST;
+}
+
+int p25_encode_alias_ldu(const p25_call *call, const uint16_t imbe[9][8],
+                         uint8_t opcode, const char fragment[7], uint8_t out[216])
+{
+    if (!fragment || !p25_alias_opcode(P25_ALIAS_MFID, opcode)) return -1;
+    uint8_t lc[9] = {opcode, P25_ALIAS_MFID};
+    memcpy(lc + 2, fragment, P25_ALIAS_FRAGMENT);
+    return encode(call, P25_DUID_LDU1, imbe, NULL, lc, out);
 }
 
 int p25_decode_frame(const uint8_t *air, size_t bytes, p25_decoded *result)
@@ -128,7 +143,10 @@ int p25_decode_frame(const uint8_t *air, size_t bytes, p25_decoded *result)
         decoded.link_control_format = frame.metadata[0];
         decoded.manufacturer_id = frame.metadata[1];
         decoded.service_options = frame.metadata[2];
-        if (p25cai_lc_decode(frame.metadata,&lc) < 0 || lc.format != 0) decoded.metadata_valid = 0;
+        if (frame.duid == P25_DUID_LDU1 && p25_alias_opcode(frame.metadata[1], frame.metadata[0])) {
+            /* LDU1 has no encryption sync. Use the unused metadata bytes. */
+            memcpy(decoded.message_indicator, frame.metadata + 2, P25_ALIAS_FRAGMENT);
+        } else if (p25cai_lc_decode(frame.metadata,&lc) < 0 || lc.format != 0) decoded.metadata_valid = 0;
         else {
             decoded.manufacturer_id = lc.manufacturer;
             decoded.service_options = lc.service;
