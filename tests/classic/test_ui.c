@@ -83,6 +83,7 @@ int main(void)
         {"Classic P25 NAC", P25_TG "down", "ok enc+ enc+ ok", "shows=$493", 4, false},
         {"Classic P25 hexadecimal NAC", P25_TG "down", "ok enc- enc- enc- ok", "shows=$F93", 5, false},
         {"Classic P25 ID", P25_TG "down down down", "ok 3 1 0 1 2 3 4 ok", "shows=3101234", 9, false},
+        {"Classic P25 busy lockout", P25_TG "down down down down", "ok long:ok", "writes=1 toast=Saved", 2, true},
         {"Classic split TX", P25_TG "down down", "ok 4 5 6 ok", "shows=$456", 5, false},
         {"Classic inherited TX unchanged", P25_TG "down down", "ok ok", "shows=Same_as_RX", 2, false},
         {"Classic explicit TX independent", P25_TG "down down", "ok 2 9 3 ok up ok 4 5 6 ok down", "shows=$293", 12, false},

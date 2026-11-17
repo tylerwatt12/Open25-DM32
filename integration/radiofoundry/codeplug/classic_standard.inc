@@ -6,6 +6,7 @@
 #include "codeplug/codeplug_kv.h"
 #if CONFIG_P25_CHANNELS
 #define CLASSIC_P25_PARAMS 9u
+#define CLASSIC_P25_BUSY_LOCKOUT 0x20u
 
 uint32_t codeplug_p25_unit_id(uint32_t own)
 {
@@ -23,6 +24,7 @@ void codeplug_p25_params_encode(const channel_t *ch, uint8_t v[CLASSIC_P25_PARAM
     p25_conv_encode(&conv,v);
     /* A saved contact remains the target owner until the user edits the TG. */
     if(!ch->contact && !ch->listen_list) {v[5]=1u;put16(v+6,ch->p25_tg);}
+    if (ch->p25_busy_lockout) v[5] |= CLASSIC_P25_BUSY_LOCKOUT;
 }
 
 bool codeplug_p25_params_decode(const uint8_t *v,uint16_t len,channel_t *ch)
@@ -31,6 +33,7 @@ bool codeplug_p25_params_decode(const uint8_t *v,uint16_t len,channel_t *ch)
     ch->mode=RADIO_MODE_P25;
     ch->p25_nac=conv.rx_nac;
     ch->p25_squelch=conv.squelch;
+    ch->p25_busy_lockout = len > 5 && (v[5] & CLASSIC_P25_BUSY_LOCKOUT);
     ch->p25_tx_nac_override=conv.tx_inherit?0u:(uint16_t)(conv.tx_nac+1u);
     ch->p25_id=codeplug_p25_unit_id(ch->dmr_id);
     ch->p25_tg=1u;
@@ -87,7 +90,7 @@ static bool classic_standard_store(uint16_t number,const channel_t *ch,bool pres
     if(t.flags&CODEPLUG_TAG_FALLBACK){put16(v+5,t.fb_chan);put16(v+7,t.fb_check);at=CODEPLUG_TAG_HEAD_MAX;}
     codeplug_p25_params_encode(ch,v+at);
     if(follow && previous>(int)at) v[at]=old[at]; /* preserve the module's squelch */
-    if(follow && previous>(int)at+5) v[at+5]|=(uint8_t)(old[at+5]&~1u);
+    if(follow && previous>(int)at+5) v[at+5]|=(uint8_t)(old[at+5]&~(1u | CLASSIC_P25_BUSY_LOCKOUT));
     if(follow && previous>(int)at+8) v[at+8]=old[at+8];
     codeplug_kv_op_t op={(uint16_t)(CODEPLUG_KEY_CH_TAG+number-1u),
         (uint16_t)((at+CLASSIC_P25_PARAMS)|(follow?CODEPLUG_KV_HEAD:0u)),v};

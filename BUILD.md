@@ -148,3 +148,15 @@ handler, formatter and feature list for disabled, lab-only and Classic builds.
 It checks the returned capability tokens and RFKV programming markers. The
 matching CPS regression parses the same C handler response and checks the form
 and table mode choices without relying on an existing P25 channel.
+
+## P25 busy channel lockout
+
+Enable **Busy channel lockout** in a conventional P25 channel to check its
+receive frequency before PTT. The radio blocks on RF carrier or decoded
+voice, including a carrier the NAC or talkgroup filters would mute. A denied
+press shows **Channel busy** and plays the existing TX denial tone at the
+configured beep level. Release PTT and press again when the channel clears.
+The option also blocks a press while the receiver is starting.
+Existing channels start with the channel option off. This is a local
+carrier-sense option. Repeater status-symbol access is described in
+TIA-102.BAAD-B section 4.1.

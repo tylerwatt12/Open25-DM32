@@ -11,8 +11,8 @@ uint32_t hal_micros(void) { return now*1000u; }
 static bool classic_on(void) { return true; }
 static uint16_t classic_battery(void) { return 8000; }
 int p25_lab_busy(void) { return classic_busy; }
-int p25_lab_set_channel(uint16_t n,uint16_t tx,uint16_t t,uint32_t i)
-{ CHECK(n==0x293 && tx==0x293 && t==42 && i==3101234);return !classic_busy; }
+int p25_lab_set_channel(uint16_t n,uint16_t tx,uint16_t t,uint32_t i,int selective)
+{ (void)selective; CHECK(n==0x293 && tx==0x293 && t==42 && i==3101234);return !classic_busy; }
 void p25_lab_channel_stop(void) { classic_stop=true; }
 int p25_lab_channel_receiving(void) { return classic_receiving; }
 int p25_lab_channel_rx(uint32_t hz)
@@ -76,12 +76,12 @@ static void test_classic_ownership(void)
         if(gate==2)sm.view.ch.tx_hz=100000000;
         if(gate==3)sm.batt.level=BATT_CRITICAL;
         if(gate==4)sm.view.ch.p25_id=0;
-        if(gate==5){sm.set.bcl=RADIO_BCL_CARRIER;sm.view.state=RS_RX;}
+        if(gate==5){sm.set.bcl=RADIO_BCL_CARRIER;classic_receiving=true;}
         radio_req_t p={.type=RREQ_PTT,.arg=1};
         CHECK(native_lab_request(&sm,&p)==1 && sm.view.state==RS_TX_DENIED);
         CHECK(classic_live->state==NT_RX && classic_starts==1);
         p.arg=0;CHECK(native_lab_request(&sm,&p)==1 && !sm.ptt);
-        sm.view.ch=saved;sm.set.tx_inhibit=false;sm.batt.level=BATT_OK;sm.set.bcl=RADIO_BCL_OFF;
+        sm.view.ch=saved;sm.set.tx_inhibit=false;sm.batt.level=BATT_OK;sm.set.bcl=RADIO_BCL_OFF;classic_receiving=false;
     }
     classic_press();
     beep_stats_t prior_beeps,after_beeps;beep_get_stats(&prior_beeps);
@@ -113,6 +113,31 @@ static void test_classic_ownership(void)
     uint8_t raw_arm[17]={1},reply[512];
     CHECK(native_lab_command(raw_arm,sizeof raw_arm,reply,sizeof reply)==1 && reply[0]!=0);
 }
+static void test_classic_busy_lockout(void)
+{
+    classic_select(true);
+    sm.view.ch.p25_busy_lockout = true;
+    hw.st.noise = 0; /* Carrier without admitted P25 voice. */
+    uint32_t rx_session = classic_sid;
+    beep_stats_t before, after;
+    beep_get_stats(&before);
+    radio_req_t ptt = {.type=RREQ_PTT, .arg=1};
+    CHECK(native_lab_request(&sm, &ptt) == 1 && sm.view.tx_deny == TXDENY_BUSY);
+    CHECK(native_lab_request(&sm, &ptt) == 1);
+    beep_get_stats(&after);
+    CHECK(after.played == before.played + 1 && beep_busy());
+    CHECK(!classic_stop && classic_sid == rx_session && classic_live->state == NT_RX);
+
+    hw.st.noise = 255;
+    classic_pump();
+    CHECK(sm.view.state == RS_TX_DENIED && classic_sid == rx_session);
+    ptt.arg = 0;
+    CHECK(native_lab_request(&sm, &ptt) == 1 && sm.view.state == RS_IDLE);
+    ptt.arg = 1;
+    CHECK(native_lab_request(&sm, &ptt) == 1 && sm.view.tx_deny == TXDENY_NONE);
+    CHECK(classic_stop);
+}
+
 static void test_classic_idle_rearm(void)
 {
     classic_select(true);
@@ -207,7 +232,7 @@ static void test_classic_saved_refresh(void)
 }
 int main(void)
 {
-    int prior=upstream_radio_main();test_classic_ownership();test_classic_idle_rearm();test_classic_saved_refresh();
+    int prior=upstream_radio_main();test_classic_ownership();test_classic_idle_rearm();test_classic_busy_lockout();test_classic_saved_refresh();
     printf("Classic real FM/DMR/P25 admission and ownership: %d failures\n",failures);
     return prior || failures ? 1 : 0;
 }

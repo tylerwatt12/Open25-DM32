@@ -20,6 +20,20 @@ static int live_owner(void);
 static bool channel_selected, channel_handoff;
 static uint8_t channel_denial;
 static uint32_t channel_tx_ms;
+
+/* Run on the radio task while it still owns a receiver on this channel. */
+static bool p25_channel_busy(const radio_sm_t *sm)
+{
+    if (!sm->view.ch.p25_busy_lockout && sm->set.bcl == RADIO_BCL_OFF) return false;
+    if (!test.owned || test.state != NT_RX || test.config.frequency_hz != sm->view.ch.rx_hz)
+        return true; /* Wait until the radio can listen before admitting PTT. */
+    if (p25_lab_channel_receiving()) return true;
+    if (!board.radio || !board.radio->status) return true;
+    radio_status_t status = {0};
+    board.radio->status(&status);
+    uint8_t level = sm->view.squelch ? sm->view.squelch : RADIO_SQUELCH_DEFAULT;
+    return status.carrier || status.noise < radio_sm_squelch_open_below(level);
+}
 static void channel_view(radio_sm_t *sm)
 {
     radio_state_t state=channel_denial && sm->ptt ? RS_TX_DENIED :
@@ -251,6 +265,10 @@ int native_lab_request(radio_sm_t *sm, const radio_req_t *r)
             if(live_owner() && test.state==NT_ARMED)nt_stop(&test,test.session,NT_USER_STOP);
         } else if(!sm->ptt) {
             channel_denial=radio_sm_tx_check(sm);
+            if (channel_denial == TXDENY_NONE && p25_channel_busy(sm)) {
+                channel_denial = TXDENY_BUSY;
+                radio_sm_p25_busy_tone(sm);
+            }
             sm->ptt=true;
             if(!channel_denial) {
                 /* ARMED is visible while mic prefill runs, before nt_begin. */
