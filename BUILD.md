@@ -43,6 +43,13 @@ Source preparation checks every overlay hash before copying. Repeating it
 checks the prepared upstream commit, source changes, overlay and FreeRTOS. A
 changed manifest or unexpected source edit causes refusal; preserve that working
 directory and prepare a separate one with `--out` rather than deleting work.
+Pass the same directory to the release build with `--source`:
+
+```sh
+$(tools/rfoundry_python.sh) tools/prepare_upstream.py --out build/upstream-alt
+$(tools/rfoundry_python.sh) tools/build_release.py --source build/upstream-alt --cross /path/to/csky-elf- --stack-check --verify-rebuild
+```
+
 For an already available source cache, `--upstream-local /path/to/git-source` and
 `--freertos-local /path/to/git-source` fetch the same pinned commits from those
 repositories. They do not change the required identities.
