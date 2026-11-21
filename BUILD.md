@@ -31,6 +31,14 @@ dates or tags. The recorded epoch is 1795197378. It refuses compiler warnings,
 checks the application size/hash, optionally checks stacks and an identical
 forced rebuild, then checks the ZIP against the reviewed package hash.
 
+Use `--print-command` to see the exact Make command before compiling:
+
+```sh
+$(tools/rfoundry_python.sh) tools/build_release.py --cross /path/to/csky-elf- --print-command
+```
+
+This prepares or verifies the source tree, prints the command as JSON and exits.
+
 The exact release compiler is GCC 14.3.0 with binutils 2.45.1 and newlib
 4.5.0.20241231. The linked archive fingerprints are recorded in
 `sources.lock.json`. The tested newlib used CK803S, little endian, soft float,
