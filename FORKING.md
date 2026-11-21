@@ -65,7 +65,7 @@ The same applies to us. If you think RadioFoundry has missed someone's credit,
 | Topic | What applies |
 |---|---|
 | The name | The license covers the code, not the name. Please give your project its own name and describe it as "based on RadioFoundry", so nobody takes it for an official release. Change `Firmware: RadioFoundry` on the About page to your project's name, so your users' bug reports reach you. |
-| The AMBE codec | It isn't in this repository and isn't ours to license ([codec](docs/dev/codec.md)). The same limits apply to your project. |
+| The AMBE codec | It isn't in this repository and isn't ours to license ([codec](https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/dev/codec.md)). The same limits apply to your project. |
 | Warranty | None, as the license says. Test before you depend on it. |
 | Radio regulations | What your build transmits, and where, is up to you and your users' licenses. |
 
@@ -82,27 +82,27 @@ The same applies to us. If you think RadioFoundry has missed someone's credit,
 If you're adding a feature (a protocol such as P25, a mode, a screen, a radio), we would be glad to have it in
 RadioFoundry, with you credited as its author. Open a
 [discussion](https://github.com/radiofoundry/radiofoundry/discussions) about what you want to build, or send a pull
-request, draft or finished ([contributing](docs/dev/contributing.md)). If you already have a fork, we'll help you
+request, draft or finished ([contributing](https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/dev/contributing.md)). If you already have a fork, we'll help you
 split it into pull requests.
 
 What a feature gains by living in this tree:
 
 | | In RadioFoundry | In a separate project |
 |---|---|---|
-| Radios | Available on every supported radio whose hardware can run it, and on radios ported later ([feature matrix](docs/feature-matrix.md)) | The radios you port and maintain |
+| Radios | Available on every supported radio whose hardware can run it, and on radios ported later ([feature matrix](https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/feature-matrix.md)) | The radios you port and maintain |
 | Upkeep | Changes to the core are made with your code in the tree, so it keeps building and working. Fixes from every contributor reach it. | You merge upstream changes yourself, and the merges get harder as the trees diverge |
-| Testing | CI builds every radio with your switch on and off and runs the host tests under sanitizers. Maintainers run the HIL tests on real radios against the SDR bench ([testing](docs/dev/testing.md)). | Your own test setup |
+| Testing | CI builds every radio with your switch on and off and runs the host tests under sanitizers. Maintainers run the HIL tests on real radios against the SDR bench ([testing](https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/dev/testing.md)). | Your own test setup |
 | Users | One install, with the web flasher, the Codeplug Editor, the manual and the translations. Users get your feature together with everyone else's. | Users choose between firmwares |
-| Review | Review by people who work on these chips every day ([gotchas](docs/spec/gotchas.md)) | Your own review |
+| Review | Review by people who work on these chips every day ([gotchas](https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/spec/gotchas.md)) | Your own review |
 | Credit | Your name on your commits, in [CONTRIBUTORS](CONTRIBUTORS), in the [contributors list](https://github.com/radiofoundry/radiofoundry/graphs/contributors) and in the release notes. You keep the copyright in the code you wrote and are credited among "The RadioFoundry Authors". | Your project's own credits |
 | Direction | Changes go through review and the project's rules | You decide everything |
 
-A feature that costs real flash goes behind a `CONFIG_` switch ([build configuration](docs/build-config.md)). Radios
+A feature that costs real flash goes behind a `CONFIG_` switch ([build configuration](https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/build-config.md)). Radios
 with little flash can leave it out, so your feature doesn't push out anyone else's.
 
 Code coming in must meet the clean-room rule: it is your own work or permissively licensed, written from specs,
 datasheets and public standards, never from GPL firmware or firmware whose license forbids commercial use
-([clean-room rules](docs/CLEANROOM.md)). If part of your project can't meet that, say so in the discussion. We can
+([clean-room rules](https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/CLEANROOM.md)). If part of your project can't meet that, say so in the discussion. We can
 often write a spec from your notes and implement that part fresh.
 
 A separate project is sometimes the right choice. If it is for you, keep the notices, and we'd still like to hear
