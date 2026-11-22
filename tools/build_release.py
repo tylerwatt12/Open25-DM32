@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 from prepare_upstream import ROOT, digest, prepare, read_lock
 
@@ -73,10 +74,15 @@ def main():
     spec = importlib.util.spec_from_file_location("classic_release_package", source / "tools/build_classic.py")
     package_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package_module)
-    package = package_module.package_application(application, out / (release["version"] + "-application.zip"),
-        version=release["version"], newlib_notice=ROOT / "notices/newlib-COPYING.NEWLIB.txt")
-    if package["sha256"] != release["package_sha256"]:
-        raise ValueError("Application matched but package differs from the reviewed release")
+    package_path = out / (release["version"] + "-application.zip")
+    with tempfile.TemporaryDirectory(prefix=".classic-package-", dir=out) as staging:
+        candidate = Path(staging) / package_path.name
+        package = package_module.package_application(application, candidate,
+            version=release["version"], newlib_notice=ROOT / "notices/newlib-COPYING.NEWLIB.txt")
+        if package["sha256"] != release["package_sha256"]:
+            raise ValueError("Application matched but package differs from the reviewed release")
+        candidate.replace(package_path)
+    package["path"] = str(package_path)
     receipt = {"release": release["version"], "source_manifest_sha256": lock_hash,
         "upstream_commit": lock["upstream"]["commit"], "freertos_commit": lock["freertos"]["commit"],
         "epoch": release["epoch"], "command": command, "application_bytes": len(original),
