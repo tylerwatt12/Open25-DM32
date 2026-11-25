@@ -12,6 +12,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +33,7 @@ def read_lock():
     if lock.get("format") != "open25-classic-source-overlay" or lock.get("version") != 1:
         raise ValueError("Unsupported source manifest")
     expected = set(lock["overlay"])
-    actual = {str(p.relative_to(ROOT / "overlay")) for p in (ROOT / "overlay").rglob("*") if p.is_file()}
+    actual = {p.relative_to(ROOT / "overlay").as_posix() for p in (ROOT / "overlay").rglob("*") if p.is_file()}
     if actual != expected:
         raise ValueError("Overlay files differ from the reviewed manifest")
     for name, record in lock["overlay"].items():
@@ -46,6 +47,9 @@ def read_lock():
 
 def checkout(destination, pin, source):
     subprocess.run(["git", "init", "-q", str(destination)], check=True)
+    git(destination, "config", "core.autocrlf", "false")
+    if sys.platform == "win32":
+        git(destination, "config", "core.longpaths", "true")
     subprocess.run(["git", "-C", str(destination), "fetch", "--quiet", "--no-tags", "--depth=1",
                     source or pin["url"], pin["commit"]], check=True)
     subprocess.run(["git", "-C", str(destination), "checkout", "--quiet", "--detach", "FETCH_HEAD"], check=True)
