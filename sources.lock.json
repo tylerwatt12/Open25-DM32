@@ -39,6 +39,10 @@
       "sha256": "cd8db8e45345639f7fc73e9520b8fe2c66d347fc655ea9602b7846683094a060",
       "mode": "100644"
     },
+    "boards/dm32/power_dm32.c": {
+      "sha256": "f6fc2399096a8c060b595d0c139b8661357df077203d507769957ae0f16334c2",
+      "mode": "100644"
+    },
     "boards/dm32/radio_dm32.c": {
       "sha256": "988d284a6845e828b92b00a6f82199192da27587e510665a42254ab45db00f73",
       "mode": "100644"
@@ -255,6 +259,10 @@
       "sha256": "51b18b8bb3e5fd87766487eaf53e24876d9cd7ff98223dff48a036084f51879a",
       "mode": "100644"
     },
+    "drivers/power/battery/battery.h": {
+      "sha256": "fee7cc97d7c09f22b8bba68ae964d4655a8d4f131db4a735f51f391a83caf3ad",
+      "mode": "100644"
+    },
     "drivers/rf/fd6818/fd6818.c": {
       "sha256": "21e499ee1fbf54f508d4cbd522b6c98d8951953a2e7677ec6560f10c5d63fb87",
       "mode": "100644"
@@ -277,6 +285,10 @@
     },
     "tests/host/Makefile": {
       "sha256": "acd8fdfee33f875aa0dd6125f5c193e9cb512536e4340d134a368480281e9a32",
+      "mode": "100644"
+    },
+    "tests/host/batteryTest.c": {
+      "sha256": "d1be046766b409797e21cc92c31b62c748a96318d3ab0d58ee9cc753ab2f1725",
       "mode": "100644"
     },
     "tests/host/classicBandsTest.c": {
