@@ -104,8 +104,14 @@ Current `main` also has two repairs that the r14 download does not:
   ([#59](https://github.com/tylerwatt12/Open25-DM32/issues/59)). No reading is
   taken now while keyed or for three seconds after.
 
+Dual watch and the GPS receiver are switched back on in the Classic profile.
+The r14 profile turned both off
+([#54](https://github.com/tylerwatt12/Open25-DM32/issues/54),
+[#39](https://github.com/tylerwatt12/Open25-DM32/issues/39)). Neither has been
+tested on a radio with this source.
+
 This is source-only development version `open25-classic-0.1.0-rc1-r15-dev`.
-Host regressions pass. With the two repairs above the firmware builds without
+Host regressions pass. With these changes the firmware builds without
 warnings, passes the stack check and rebuilds identically on RadioFoundry's
 GCC 14.2.0 toolchain image. It has not been rebuilt with the exact release
 toolchain, so the release pins are empty (see [BUILD.md](BUILD.md)). New RF
@@ -185,7 +191,7 @@ Applies to both builds. All ranges are in MHz.
 - Startup and programming-cable problems, NXDN recovery after damaged signals, and behavior during long periods of traffic are still being checked.
 - CTCSS tones may drop while sending DTMF keypad tones.
 - P25 and NXDN channels have no talk permit tone. DMR plays it just before keying.
-- Dual watch, GPS and the FM broadcast receiver are not in the Classic profile (`overlay/config/variants/classic.mk` turns them off).
+- The FM broadcast receiver is not in the Classic profile (`overlay/config/variants/classic.mk` turns it off).
 
 Testing is ongoing. Support for a feature does not guarantee it will work with
 every radio or system.

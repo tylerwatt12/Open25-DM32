@@ -52,7 +52,7 @@
       "mode": "100644"
     },
     "config/variants/classic.mk": {
-      "sha256": "9238c5ca257effe10acd92aaa370d7c35da881fca7c11c8876f8467e380e0f6b",
+      "sha256": "53fb82b0c52783770ef99b531eaa90302b7befd05a80254134e96c3e15d5cc4f",
       "mode": "100644"
     },
     "core/air/air_session.c": {
