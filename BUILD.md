@@ -8,6 +8,21 @@ the system-identity P25 transmit guard. These source build pins describe the
 development image; they do not publish or qualify a firmware release. Check out
 `classic-0.1.0-rc1-r14` to reproduce the existing downloadable r14 release.
 
+The application and package pins in `sources.lock.json` are empty at present:
+the source changed after the last build with the exact release toolchain.
+`tools/build_release.py` stops with "Release artifact pins are incomplete" until
+they are measured again. Meanwhile the prepared source builds without the pins:
+
+```sh
+$(tools/rfoundry_python.sh) build/upstream/tools/build_classic.py --cross /path/to/csky-elf- --stack-check
+```
+
+That local build is stamped with the checkout's commit time, not the recorded
+epoch, so its size and hashes are not the pins. Measure `application_bytes`,
+`application_sha256` and `package_sha256` with the release command
+(`tools/build_release.py --print-command` prints it) and the exact release
+toolchain, and put them back before a release.
+
 The [project README](README.md) describes the editions, installation, programming
 and current release status. This file covers source preparation and building.
 
