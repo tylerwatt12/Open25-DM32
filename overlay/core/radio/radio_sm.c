@@ -6195,6 +6195,12 @@ static uint16_t air_number(const radio_sm_t *sm)
 // --- Air-framed modes (P25, NXDN): their modules (radio_p25.c, radio_nxdn.c) run the engine and the voice; here, when
 // it runs and the transmitter, the same for each (radio_air.h). One runs at a time ---
 
+// The talk permit before keying, as DMR has it (permit_before_key, built with DMR as its helpers are): on a board whose
+// beeps can't sound on air, PTT plays the permit and the transmitter keys when it has played (air_ptt)
+#define AIR_PERMIT		CONFIG_DMR
+// The hold keys after this long whatever permit_busy says (the DMR stack's DMR_CALL_PERMIT_MAX_MS)
+#define AIR_PERMIT_MAX_MS	400u
+
 #if CONFIG_NXDN
 // NXDN is the mode whose engine runs, or the channel's when none runs
 static bool nxdn_now(const radio_sm_t *sm)
@@ -6321,6 +6327,7 @@ static void air_stop(radio_sm_t *sm)
 		board.radio->tx_off();
 	}
 	sm->air_tx = false;
+	sm->air_permit = false;		// a talk permit's hold ends with the engine (every tune stops it first)
 #if CONFIG_P25_TRUNK
 	sm->p25_req = sm->p25_talk = false;
 #endif
@@ -6378,6 +6385,49 @@ static void air_key(radio_sm_t *sm, uint32_t now_ms, uint32_t hz)
 	air_poll(sm);			// the engine's transmit state in the view now, not at the next tick
 	changed(sm);
 }
+
+// PTT on an air mode's conventional channel, tx_check passed. Where the talk permit sounds before keying
+// (permit_before_key) it plays now, PTT held and nothing keyed, and air_permit_tick keys when it has played; anywhere
+// else the transmitter keys at once. A channel that can't transmit is refused at once too (air_key), without a permit
+static void air_ptt(radio_sm_t *sm, uint32_t now_ms)
+{
+#if AIR_PERMIT
+	const radio_air_ops_t *o = air_ops(sm);
+
+	if (permit_before_key(sm) && o->running() && !(o->no_tx != NULL && o->no_tx())) {
+		sm->air_permit = true;
+		sm->air_permit_ms = now_ms;
+		permit_play(sm, BEEP_TX_PERMIT_SHORT);
+		return;
+	}
+#endif
+	air_key(sm, now_ms, sm->view.ch.tx_hz);
+}
+
+#if AIR_PERMIT
+// The talk permit's hold (air_ptt), every tick: the transmitter keys once the tone has played and none of it is left
+// in the board's buffers (permit_busy, true from the moment air_ptt played it), AIR_PERMIT_MAX_MS after PTT at the
+// latest. It never keys without PTT held: let go in the hold, nothing is sent. PTT's checks run again before the
+// key-up: the inhibit or the battery may have changed while it played. noinline, as p25t_tick is: the keying's locals
+// stay out of the tick's frame
+static void __attribute__((noinline)) air_permit_tick(radio_sm_t *sm, uint32_t now_ms)
+{
+	if (!sm->ptt) {
+		sm->air_permit = false;
+		return;
+	}
+	if (now_ms - sm->air_permit_ms < AIR_PERMIT_MAX_MS && permit_busy()) {
+		return;
+	}
+	sm->air_permit = false;
+	uint8_t reason = tx_check(sm);
+	if (reason != TXDENY_NONE) {
+		deny(sm, reason);
+		return;
+	}
+	air_key(sm, now_ms, sm->view.ch.tx_hz);
+}
+#endif
 
 // The settings sent while it transmitted (RREQ_P25_SET, RREQ_NXDN_SET): the engine takes them now
 static void air_apply(radio_sm_t *sm)
@@ -6523,7 +6573,13 @@ static void air_tick(radio_sm_t *sm, uint32_t now_ms)
 		p25t_tick(sm, now_ms);
 	}
 #endif
-	if (sm->air_tx || sm->view.state == RS_TX || sm->view.state == RS_TX_DENIED) {
+#if AIR_PERMIT
+	if (sm->air_permit) {
+		air_permit_tick(sm, now_ms);
+	}
+#endif
+	// (in the talk permit's hold the view stays as PTT left it: the key-up is next)
+	if (sm->air_tx || sm->air_permit || sm->view.state == RS_TX || sm->view.state == RS_TX_DENIED) {
 		return;
 	}
 	// A call on our NAC or RAN shows as a reception; its voice plays only if it passes the squelch (PLAYED)
@@ -6653,7 +6709,7 @@ static void ptt_down(radio_sm_t *sm, uint32_t now_ms)
 		}
 #endif
 		if (!sm->air_tx) {
-			air_key(sm, now_ms, sm->view.ch.tx_hz);
+			air_ptt(sm, now_ms);
 		}		// else the last transmission is still ending: air_tick keys again once it is done
 		return;
 	}
@@ -6719,6 +6775,7 @@ static void ptt_release(radio_sm_t *sm, bool roger, uint32_t now_ms)
 	}
 #endif
 #if CONFIG_AIR
+	sm->air_permit = false;		// let go in the talk permit's hold: nothing was keyed, and nothing is
 	if (sm->air_tx && sm->view.state == RS_TX) {
 		const radio_air_ops_t *o = air_ops(sm);
 		o->tx_stop();	// the frame on air is finished and the end sent; air_tick ends it at done

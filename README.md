@@ -110,6 +110,13 @@ The r14 profile turned both off
 [#39](https://github.com/tylerwatt12/Open25-DM32/issues/39)). Neither has been
 tested on a radio with this source.
 
+P25 and NXDN channels play the talk permit tone
+([#55](https://github.com/tylerwatt12/Open25-DM32/issues/55)). The DM-32
+cannot beep while it transmits, so the tone plays just before the radio keys,
+as on DMR, and the radio keys when it has played: about a tenth of a second
+after PTT. **Settings > Sound > Talk permit tone** turns it off. Not tested on
+a radio.
+
 This is source-only development version `open25-classic-0.1.0-rc1-r15-dev`.
 Host regressions pass. With these changes the firmware builds without
 warnings, passes the stack check and rebuilds identically on RadioFoundry's
@@ -190,7 +197,6 @@ Applies to both builds. All ranges are in MHz.
 - Classic P25 transmit audio can be quieter than Next.
 - Startup and programming-cable problems, NXDN recovery after damaged signals, and behavior during long periods of traffic are still being checked.
 - CTCSS tones may drop while sending DTMF keypad tones.
-- P25 and NXDN channels have no talk permit tone. DMR plays it just before keying.
 - The FM broadcast receiver is not in the Classic profile (`overlay/config/variants/classic.mk` turns it off).
 
 Testing is ongoing. Support for a feature does not guarantee it will work with

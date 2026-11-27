@@ -471,11 +471,17 @@ static void air_step(void);	// with the far radio's engine, below
 static bool far_on_air(void) { return false; }
 #endif
 
+// radioCoreTestAirPermit's board can't beep on air (CAP_BEEP_NOT_ON_AIR). The caps are const and every other test here
+// expects a board that keys at once, so that build runs the talk permit's tests alone (main)
+#ifndef TEST_BEEP_NOT_ON_AIR
+#define TEST_BEEP_NOT_ON_AIR	0
+#endif
+
 const board_t board = {
 	.name = "fake",
 	.hwopts = fake_hwopts,
 	.hwopt_count = 1,
-	.caps = CAP_GPS,
+	.caps = CAP_GPS | (TEST_BEEP_NOT_ON_AIR ? CAP_BEEP_NOT_ON_AIR : 0),
 	.gps = &fake_gps,
 	.bands = bands,
 	.band_count = 4,
@@ -1603,6 +1609,42 @@ static void run(uint32_t ms)
 		}
 	}
 }
+
+// The talk permit before keying on an air mode's channel (radio_sm.c air_ptt), where the core builds it: tested in the
+// build whose board can't beep on air (TEST_BEEP_NOT_ON_AIR)
+#define AIR_PERMIT_TESTS	(TEST_BEEP_NOT_ON_AIR && CONFIG_AIR && CONFIG_DMR && CONFIG_BEEP)
+#if AIR_PERMIT_TESTS
+// PTT on the channel selected: how many beeps played and how many keyings began by ms later, PTT still held
+static void permit_press(uint32_t ms, uint32_t *beeps, int *keyings)
+{
+	beep_stats_t b0, b1;
+	int calls = hw.tx_calls;
+
+	beep_get_stats(&b0);
+	req(RREQ_PTT, 1);
+	run(ms);
+	beep_get_stats(&b1);
+	*beeps = b1.played - b0.played;
+	*keyings = hw.tx_calls - calls;
+}
+
+#if CONFIG_P25
+// Settings > Sound > Talk permit tone, and where the start tone goes on a channel that isn't DMR (sig_out_t)
+static void permit_settings(bool talk_permit, uint8_t begin_out)
+{
+	radio_settings_t set = sm.set;
+
+	set.talk_permit = talk_permit;
+#if CONFIG_SIG_TONES
+	set.sig_fm[SIG_EV_BEGIN] = begin_out;
+#else
+	(void)begin_out;
+#endif
+	radio_sm_set_settings(&sm, &set, now);
+	run(50);
+}
+#endif
+#endif
 
 static void mk_lc(uint8_t lc[9], bool group, uint32_t dst, uint32_t src)
 {
@@ -6663,6 +6705,200 @@ static void test_p25_denied(void)
 	CHECK(sm.view.ch.mode == RADIO_MODE_FM && !radio_p25_running());
 }
 
+#if AIR_PERMIT_TESTS
+// The talk permit on a P25 channel, on a board whose beeps can't sound on air (CAP_BEEP_NOT_ON_AIR), as DMR has it:
+// PTT plays the short permit with nothing keyed, and the transmitter keys when it has played. PTT let go in the hold
+// sends nothing. With the permit off or on a no-beep channel PTT keys at once, as it does on a board that beeps on
+// air (test_p25_tx)
+static void test_p25_permit(void)
+{
+	uint32_t beeps;
+	int keyings;
+
+	setup_codeplug_p25();
+	start();
+	p25_defaults();
+	aud.feed = true;			// the speaker stream runs: the tone plays out
+	req(RREQ_ZONE_POS, 2);
+	far_begin(P25_NAC_DEFAULT, 1001, false, 1);
+	run(100);
+
+	// PTT: the permit at once, nothing keyed and the screen as it was; not keyed while the tone still plays
+	permit_press(0, &beeps, &keyings);
+	CHECK(beeps == 1 && keyings == 0 && !hw.keyed && sm.view.state == RS_IDLE && sm.air_permit && fair[0].begins == 0);
+	run(30);
+	CHECK(!hw.keyed && sm.air_permit);
+	// ... then keyed once the tone has played (well inside the hold's 400 ms), as PTT keys without a permit, and no
+	// second tone
+	beep_stats_t b0, b1;
+	beep_get_stats(&b0);
+	uint32_t held = 30;
+	while (!hw.keyed && held < 1000) {
+		run(5);
+		held += 5;
+	}
+	CHECK(held > 30 && held <= 300);
+	run(400);
+	beep_get_stats(&b1);
+	CHECK(sm.view.state == RS_TX && hw.keyed && hw.tx_calls == 1 && fair[0].on && fair[0].begins == 1);
+	CHECK(!sm.air_permit && b1.played == b0.played);
+	CHECK(hw.tx_hz == 446100000 && hw.tx_bw == RADIO_BW_12K5 && hw.tx_tone.type == TONE_NONE);
+	run(600);
+	CHECK(far_heard.starts == 1 && far_heard.call.lc.src == own_dmr_id);
+	req(RREQ_PTT, 0);
+	run(500);
+	CHECK(sm.view.state == RS_IDLE && !hw.keyed && far_heard.ends == 1 && fair[0].keyed_violations == 0);
+
+	// PTT let go in the hold: the tone was heard, nothing is sent, and the next press starts over
+	permit_press(20, &beeps, &keyings);
+	CHECK(beeps == 1 && keyings == 0 && sm.air_permit);
+	req(RREQ_PTT, 0);
+	CHECK(!sm.air_permit && sm.view.state == RS_IDLE);
+	run(600);
+	CHECK(sm.view.state == RS_IDLE && !hw.keyed && hw.tx_calls == 1 && far_heard.starts == 1);
+	// (the hold keys nothing without PTT held, whatever let it go)
+	permit_press(20, &beeps, &keyings);
+	sm.ptt = false;
+	run(600);
+	CHECK(!sm.air_permit && sm.view.state == RS_IDLE && !hw.keyed && hw.tx_calls == 1);
+	permit_press(450, &beeps, &keyings);
+	CHECK(beeps == 1 && keyings == 1 && sm.view.state == RS_TX);
+
+	// Pressed again while that one ends: a new permit when it is done, then keyed again
+	req(RREQ_PTT, 0);
+	permit_press(0, &beeps, &keyings);
+	CHECK(beeps == 0 && keyings == 0 && hw.keyed && !sm.air_permit);	// still ending
+	beep_get_stats(&b0);
+	run(1000);
+	beep_get_stats(&b1);
+	CHECK(sm.view.state == RS_TX && hw.keyed && hw.tx_calls == 3 && b1.played == b0.played + 1);
+	req(RREQ_PTT, 0);
+	run(500);
+	CHECK(sm.view.state == RS_IDLE && !hw.keyed && far_heard.starts == 3 && far_heard.ends == 3);
+
+	// PTT over a call being heard: the reception ends at PTT and stays ended through the hold, then keyed (P25 keys
+	// over a call without the permit too)
+	far_begin(P25_NAC_DEFAULT, 1001, false, 1);
+	CHECK(p25_engine_tx_prepare(&far_eng) && p25_engine_tx_go(&far_eng));
+	far_tx = true;
+	run(600);
+	CHECK(sm.view.state == RS_RX);
+	permit_press(0, &beeps, &keyings);
+	CHECK(sm.view.state == RS_IDLE && sm.air_permit && keyings == 0);
+	run(30);
+	CHECK(sm.view.state == RS_IDLE && sm.air_permit && !hw.keyed);
+	run(450);
+	CHECK(sm.view.state == RS_TX && hw.keyed && hw.tx_calls == 4);
+	req(RREQ_PTT, 0);
+	p25_engine_tx_stop(&far_eng);
+	run(800);
+	CHECK(!far_tx && sm.view.state == RS_IDLE && !hw.keyed);
+
+	// A tone that never plays out (no speaker stream): the hold ends by itself, 400 ms after PTT
+	aud.feed = false;
+	permit_press(350, &beeps, &keyings);
+	CHECK(keyings == 0 && sm.air_permit);
+	run(100);
+	CHECK(sm.view.state == RS_TX && hw.keyed && hw.tx_calls == 5);
+	req(RREQ_PTT, 0);
+	run(500);
+	aud.feed = true;
+	run(500);
+
+	// PTT's checks run again when the hold ends: inhibited meanwhile, refused, nothing keyed
+	permit_press(10, &beeps, &keyings);
+	sm.set.tx_inhibit = true;
+	run(450);
+	CHECK(sm.view.state == RS_TX_DENIED && sm.view.tx_deny == TXDENY_INHIBIT && !hw.keyed && hw.tx_calls == 5);
+	req(RREQ_PTT, 0);
+	sm.set.tx_inhibit = false;
+	run(300);
+	CHECK(sm.view.state == RS_IDLE);
+
+	// Another channel selected in the hold, an FM one or another P25 one: that press keys nothing, there or here
+	add(5, "P25 two", 446200000, RADIO_MODE_P25, false, 2);	// zone Local, position 4
+	req(RREQ_RELOAD, 0);
+	run(50);
+	for (int32_t pos = 0; pos <= 4; pos += 4) {
+		permit_press(10, &beeps, &keyings);
+		CHECK(sm.air_permit);
+		req(RREQ_ZONE_POS, pos);
+		CHECK(sm.view.channel_number == (pos == 0 ? 1 : 5) && !sm.air_permit);
+		run(500);
+		CHECK(!hw.keyed && hw.tx_calls == 5 && sm.view.state == RS_IDLE);
+		req(RREQ_PTT, 0);
+		req(RREQ_ZONE_POS, 2);
+		run(300);
+	}
+
+	// A channel that can't transmit is refused at once, with the refusal's tone alone
+	air_nofit = true;
+	req(RREQ_CH_STEP, 1);
+	req(RREQ_CH_STEP, -1);
+	CHECK(sm.view.channel_number == 3 && !radio_p25_running());
+	permit_press(0, &beeps, &keyings);
+	CHECK(sm.view.state == RS_TX_DENIED && sm.view.tx_deny == TXDENY_REFUSED && !sm.air_permit && beeps == 1);
+	req(RREQ_PTT, 0);
+	air_nofit = false;
+	req(RREQ_CH_STEP, 1);
+	req(RREQ_CH_STEP, -1);
+	run(300);
+	CHECK(radio_p25_running() && sm.view.state == RS_IDLE);
+
+	// Settings > Sound > Talk permit tone off: keyed at once, no tone
+	permit_settings(false, SIG_OUT_DEFAULT);
+	permit_press(0, &beeps, &keyings);
+	CHECK(beeps == 0 && keyings == 1 && sm.view.state == RS_TX && !sm.air_permit);
+	req(RREQ_PTT, 0);
+	run(500);
+#if CONFIG_SIG_TONES
+	// The start tone (the FM one: what an air channel's tones follow) off: none, although the permit is on
+	permit_settings(true, SIG_OUT_OFF);
+	permit_press(0, &beeps, &keyings);
+	CHECK(beeps == 0 && keyings == 1 && sm.view.state == RS_TX);
+	req(RREQ_PTT, 0);
+	run(500);
+	// ... on the speaker: its sequence plays in the hold, then the key-up
+	permit_settings(false, SIG_OUT_LOCAL);
+	permit_press(0, &beeps, &keyings);
+	CHECK(beeps == 1 && keyings == 0 && sm.air_permit);
+	run(450);
+	CHECK(sm.view.state == RS_TX && hw.keyed);
+	req(RREQ_PTT, 0);
+	run(500);
+	// ... on air only: nothing on the speaker, and an air mode sends no tone, so keyed at once
+	permit_settings(true, SIG_OUT_AIR);
+	permit_press(0, &beeps, &keyings);
+	CHECK(beeps == 0 && keyings == 1 && sm.view.state == RS_TX);
+	req(RREQ_PTT, 0);
+	run(500);
+#endif
+	permit_settings(true, SIG_OUT_DEFAULT);
+
+	// A channel with beeps off: keyed at once
+	chans[3].no_beep = true;
+	req(RREQ_RELOAD, 0);
+	run(50);
+	permit_press(0, &beeps, &keyings);
+	CHECK(beeps == 0 && keyings == 1 && sm.view.state == RS_TX);
+	req(RREQ_PTT, 0);
+	run(500);
+	chans[3].no_beep = false;
+	req(RREQ_RELOAD, 0);
+	run(50);
+	CHECK(sm.view.state == RS_IDLE && !hw.keyed && fair[0].keyed_violations == 0);
+	aud.feed = false;
+	far_stop();
+	// Off P25 for the test after, as test_p25 leaves it
+	setup_codeplug();
+	req(RREQ_RELOAD, 0);
+	run(50);
+	if (radio_p25_running()) {
+		radio_p25_end();
+	}
+}
+#endif
+
 // Leaving P25 for FM and DMR, and back: P25 stops, the provider closes, the other mode starts on the modem
 static void test_p25_leave(void)
 {
@@ -8234,6 +8470,59 @@ static void test_nxdn_tx(void)
 	CHECK(sm.view.state == RS_IDLE && v->tx == AIR_TX_IDLE && fair[0].keyed_violations == 0);
 	nfar_stop();
 }
+
+#if AIR_PERMIT_TESTS
+// The talk permit on an NXDN channel, on a board whose beeps can't sound on air: the permit plays before the key-up,
+// as on P25 (test_p25_permit has the rest). A profile the provider only receives is refused at once, without one
+static void test_nxdn_permit(void)
+{
+	uint32_t beeps;
+	int keyings;
+
+	codec_present = true;			// NXDN's voice is the DMR vocoder's: PTT is refused without it
+	setup_codeplug_nxdn();
+	start();
+	nxdn_defaults();
+	aud.feed = true;
+	req(RREQ_ZONE_POS, 2);
+	nfar_begin(true, 1, 2001, false, 1);
+	run(100);
+
+	permit_press(0, &beeps, &keyings);
+	CHECK(beeps == 1 && keyings == 0 && !hw.keyed && sm.view.state == RS_IDLE && sm.air_permit);
+	run(450);
+	CHECK(sm.view.state == RS_TX && hw.keyed && hw.tx_calls == 1 && fair[0].begins == 1 && !sm.air_permit);
+	CHECK(hw.tx_hz == 446100000 && hw.tx_bw == RADIO_BW_12K5 && hw.tx_tone.type == TONE_NONE);
+	run(600);
+	CHECK(nfar_heard.starts == 1 && nfar_heard.call.ran == 1);
+	req(RREQ_PTT, 0);
+	run(500);
+	CHECK(sm.view.state == RS_IDLE && !hw.keyed && nfar_heard.ends == 1 && fair[0].keyed_violations == 0);
+
+	// PTT let go in the hold: nothing is sent
+	permit_press(20, &beeps, &keyings);
+	req(RREQ_PTT, 0);
+	run(600);
+	CHECK(beeps == 1 && sm.view.state == RS_IDLE && hw.tx_calls == 1 && nfar_heard.starts == 1);
+
+	// 4800 bit/s on a provider that only receives it: refused at once, the refusal's tone alone
+	radio_nxdn_settings_t s = nxdn_default_set;
+	s.rate9600 = false;
+	radio_req_nxdn_settings(&s);
+	air_fit2400[0] = AIR_FIT_RX | AIR_FIT_SOFT;
+	req(RREQ_ZONE_POS, 1);
+	req(RREQ_ZONE_POS, 2);
+	permit_press(0, &beeps, &keyings);
+	CHECK(sm.view.state == RS_TX_DENIED && sm.view.tx_deny == TXDENY_AIR_NO_TX && !sm.air_permit && beeps == 1 &&
+	      keyings == 0);
+	req(RREQ_PTT, 0);
+	run(50);
+	air_fit2400[0] = AIR_FIT_RX | AIR_FIT_TX | AIR_FIT_SOFT;
+	nxdn_defaults();
+	aud.feed = false;
+	nfar_stop();
+}
+#endif
 
 static void test_nxdn_mode(void)
 {
@@ -10714,6 +11003,18 @@ static void test_t3_stun(void)
 
 int main(void)
 {
+	if (TEST_BEEP_NOT_ON_AIR) {
+		// radioCoreTestAirPermit: the talk permit before keying alone (the tests below expect a board that keys at
+		// once)
+#if AIR_PERMIT_TESTS && CONFIG_P25
+		test_p25_permit();
+#endif
+#if AIR_PERMIT_TESTS && CONFIG_NXDN
+		test_nxdn_permit();
+#endif
+		printf("# radioCoreTestAirPermit: %d checks, %s\n", checks, failures ? "FAILED" : "PASSED");
+		return failures != 0 || checks == 0;
+	}
 	test_tx_limit_op();
 	test_startup();
 	test_persist();

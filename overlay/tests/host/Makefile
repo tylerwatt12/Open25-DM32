@@ -1856,3 +1856,17 @@ run: run-rx-policy
 run-rx-policy: p25TxPolicyTest rxCoverageMenuTest
 	./p25TxPolicyTest
 	./rxCoverageMenuTest
+
+# The talk permit before keying on P25 and NXDN channels: radioCoreTest's board with CAP_BEEP_NOT_ON_AIR, and
+# those tests alone.
+TESTS += radioCoreTestAirPermit
+radioCoreTestAirPermit: $(RCP25NX) $(wildcard $(CORE)/radio/*.h) $(wildcard $(CORE)/dmr/call/*.h) \
+                  $(CORE)/dmr/dmrDataService.h $(CORE)/ui/ui_svc.h $(wildcard $(CORE)/nxdn/*.h) \
+                  $(wildcard $(CORE)/p25/*.h) $(wildcard $(CORE)/air/*.h) $(wildcard $(CORE)/dmr/ambe/*.h)
+	$(CC) $(CFLAGS) $(CORE_HAL) -I. -DDMR_RX_TRACE=0 -DCONFIG_DMR_IP_GATEWAY=0 -DCONFIG_SFR=1 -DCONFIG_APRS=0 \
+		-DCONFIG_P25=1 -DCONFIG_NXDN=1 -DCONFIG_NXDN_SCRAMBLER=1 -DCONFIG_AIR_RAW=1 -DTEST_BEEP_NOT_ON_AIR=1 \
+		-o $@ $(RCP25NX) -lm
+run: run-air-permit
+run-air-permit: radioCoreTestAirPermit
+	./radioCoreTestAirPermit
+.PHONY: run-air-permit

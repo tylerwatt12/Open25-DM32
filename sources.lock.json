@@ -208,7 +208,11 @@
       "mode": "100644"
     },
     "core/radio/radio_sm.c": {
-      "sha256": "48921c43f865f944ea0fe1922e6d7b4e10436cda4fdbfadf0478d7d468b00c20",
+      "sha256": "254c48e800451eb8f441b6cd9cba682da6a232468ca0942a81e51fd3851ac7f2",
+      "mode": "100644"
+    },
+    "core/radio/radio_sm.h": {
+      "sha256": "065bb101e96285ddb8028c718bb6d17c57fc1624dc2af2c07b70014eb4f8cd11",
       "mode": "100644"
     },
     "core/settings/settings.h": {
@@ -284,7 +288,7 @@
       "mode": "100644"
     },
     "tests/host/Makefile": {
-      "sha256": "acd8fdfee33f875aa0dd6125f5c193e9cb512536e4340d134a368480281e9a32",
+      "sha256": "11521263085115ada8de2a779dc5ccbdec9cd39b346a88d1c573c0966f5a4f05",
       "mode": "100644"
     },
     "tests/host/batteryTest.c": {
@@ -360,7 +364,7 @@
       "mode": "100644"
     },
     "tests/host/radioCoreTest.c": {
-      "sha256": "a949accf01d4d822dfbb53ed2d948eb4655d7361e125b41b550111ee9b789b6e",
+      "sha256": "c5cd3c2e6b454ea95ecb135f6d6358a8d770c11619a953f6d11ea24339edc6eb",
       "mode": "100644"
     },
     "tests/host/radioFeaturesTest.c": {
