@@ -15,9 +15,9 @@
     "version": "open25-classic-0.1.0-rc1-r15-dev",
     "epoch": 1795307532,
     "board": "dm32",
-    "application_bytes": 352120,
-    "application_sha256": "f5f3ee1f4ee062d0b8b9bc3fa71cc99dae9a9b612ac2f0ff3a38300f30be0179",
-    "package_sha256": "99f15e75621c738194d3b65a1a37aa9db030e455ad4323eb283e2f31a1c1011a"
+    "application_bytes": 0,
+    "application_sha256": "",
+    "package_sha256": ""
   },
   "toolchain": {
     "gcc": "14.3.0",
@@ -39,12 +39,20 @@
       "sha256": "cd8db8e45345639f7fc73e9520b8fe2c66d347fc655ea9602b7846683094a060",
       "mode": "100644"
     },
+    "boards/dm32/power_dm32.c": {
+      "sha256": "f6fc2399096a8c060b595d0c139b8661357df077203d507769957ae0f16334c2",
+      "mode": "100644"
+    },
+    "boards/dm32/radio_dm32.c": {
+      "sha256": "988d284a6845e828b92b00a6f82199192da27587e510665a42254ab45db00f73",
+      "mode": "100644"
+    },
     "config/features.mk": {
       "sha256": "430794ebb907f58e9b6528b567280dd91d56cf36b1f9242e7db3edf5f473157a",
       "mode": "100644"
     },
     "config/variants/classic.mk": {
-      "sha256": "9238c5ca257effe10acd92aaa370d7c35da881fca7c11c8876f8467e380e0f6b",
+      "sha256": "53fb82b0c52783770ef99b531eaa90302b7befd05a80254134e96c3e15d5cc4f",
       "mode": "100644"
     },
     "core/air/air_session.c": {
@@ -200,7 +208,11 @@
       "mode": "100644"
     },
     "core/radio/radio_sm.c": {
-      "sha256": "48921c43f865f944ea0fe1922e6d7b4e10436cda4fdbfadf0478d7d468b00c20",
+      "sha256": "254c48e800451eb8f441b6cd9cba682da6a232468ca0942a81e51fd3851ac7f2",
+      "mode": "100644"
+    },
+    "core/radio/radio_sm.h": {
+      "sha256": "065bb101e96285ddb8028c718bb6d17c57fc1624dc2af2c07b70014eb4f8cd11",
       "mode": "100644"
     },
     "core/settings/settings.h": {
@@ -251,6 +263,18 @@
       "sha256": "51b18b8bb3e5fd87766487eaf53e24876d9cd7ff98223dff48a036084f51879a",
       "mode": "100644"
     },
+    "drivers/power/battery/battery.h": {
+      "sha256": "fee7cc97d7c09f22b8bba68ae964d4655a8d4f131db4a735f51f391a83caf3ad",
+      "mode": "100644"
+    },
+    "drivers/rf/fd6818/fd6818.c": {
+      "sha256": "21e499ee1fbf54f508d4cbd522b6c98d8951953a2e7677ec6560f10c5d63fb87",
+      "mode": "100644"
+    },
+    "drivers/rf/fd6818/fd6818.h": {
+      "sha256": "90adbfadf9be20a89f329fd1966860d2e04e3a3b893e87036ebcffe234ee7f04",
+      "mode": "100644"
+    },
     "hal/board.h": {
       "sha256": "fd42f3482ae1122e32c47b0685c147a9dd22fd460451dd591cf7996df47d35b8",
       "mode": "100644"
@@ -264,7 +288,11 @@
       "mode": "100644"
     },
     "tests/host/Makefile": {
-      "sha256": "acd8fdfee33f875aa0dd6125f5c193e9cb512536e4340d134a368480281e9a32",
+      "sha256": "11521263085115ada8de2a779dc5ccbdec9cd39b346a88d1c573c0966f5a4f05",
+      "mode": "100644"
+    },
+    "tests/host/batteryTest.c": {
+      "sha256": "d1be046766b409797e21cc92c31b62c748a96318d3ab0d58ee9cc753ab2f1725",
       "mode": "100644"
     },
     "tests/host/classicBandsTest.c": {
@@ -281,6 +309,10 @@
     },
     "tests/host/codeplugFormatTest.c": {
       "sha256": "7a183c9212055fee566da9d3e7fc1a6424564cfffaf443bf2e97e31253baea82",
+      "mode": "100644"
+    },
+    "tests/host/fd6818Test.c": {
+      "sha256": "3b56a2b1e80bd21921fa875edb740e556fa5673d27b00a36caa0b1c55d53a966",
       "mode": "100644"
     },
     "tests/host/hrc6000AirTest.c": {
@@ -332,7 +364,7 @@
       "mode": "100644"
     },
     "tests/host/radioCoreTest.c": {
-      "sha256": "a949accf01d4d822dfbb53ed2d948eb4655d7361e125b41b550111ee9b789b6e",
+      "sha256": "c5cd3c2e6b454ea95ecb135f6d6358a8d770c11619a953f6d11ea24339edc6eb",
       "mode": "100644"
     },
     "tests/host/radioFeaturesTest.c": {
@@ -360,7 +392,7 @@
       "mode": "100755"
     },
     "tools/test_classic_bands.py": {
-      "sha256": "73f647d40d6a0aa86fb48a0e795db8564050c2b292bab60c4c4f1233feb4a8bd",
+      "sha256": "3152b4bd360131beb5cca77d390059acf1490d63b26a6a4fa03e2a2568428b1e",
       "mode": "100644"
     },
     "tools/test_classic_product.py": {

@@ -87,8 +87,41 @@ reveals a blocked trunked identity; it never treats a NAC as a System ID.
 Observed carrier blocks last until reboot. This source does not add trunking
 to the default Classic feature set.
 
+Current `main` also has two repairs that the r14 download does not:
+
+- **Digital transmit after an FM channel with a receive tone.** r14 leaves the
+  RF chip's sub-audio on when the radio goes from an FM channel with a receive
+  CTCSS or DCS tone to a DMR, P25 or NXDN channel. The tone then rides on every
+  digital transmission, and none decodes until the radio is switched off and
+  on, or an FM channel without a receive tone is selected first. This matches
+  the report in [#56](https://github.com/tylerwatt12/Open25-DM32/issues/56).
+  r13 carried a repair for this that the r14 source layout lost; this one is
+  RadioFoundry's
+  ([#825](https://github.com/RadioFoundry/RadioFoundry/pull/825)).
+- **Battery level while transmitting.** The status bar read the battery all
+  through a transmission, so the charge shown fell while the radio was keyed
+  and came back afterwards
+  ([#59](https://github.com/tylerwatt12/Open25-DM32/issues/59)). No reading is
+  taken now while keyed or for three seconds after.
+
+Dual watch and the GPS receiver are switched back on in the Classic profile.
+The r14 profile turned both off
+([#54](https://github.com/tylerwatt12/Open25-DM32/issues/54),
+[#39](https://github.com/tylerwatt12/Open25-DM32/issues/39)). Neither has been
+tested on a radio with this source.
+
+P25 and NXDN channels play the talk permit tone
+([#55](https://github.com/tylerwatt12/Open25-DM32/issues/55)). The DM-32
+cannot beep while it transmits, so the tone plays just before the radio keys,
+as on DMR, and the radio keys when it has played: about a tenth of a second
+after PTT. **Settings > Sound > Talk permit tone** turns it off. Not tested on
+a radio.
+
 This is source-only development version `open25-classic-0.1.0-rc1-r15-dev`.
-Host regressions and firmware build/stack/reproducibility checks pass; new RF
+Host regressions pass. With these changes the firmware builds without
+warnings, passes the stack check and rebuilds identically on RadioFoundry's
+GCC 14.2.0 toolchain image. It has not been rebuilt with the exact release
+toolchain, so the release pins are empty (see [BUILD.md](BUILD.md)). New RF
 qualification is pending. The downloadable release remains r14. To reproduce
 released r14, use the `classic-0.1.0-rc1-r14` tag.
 
@@ -164,6 +197,7 @@ Applies to both builds. All ranges are in MHz.
 - Classic P25 transmit audio can be quieter than Next.
 - Startup and programming-cable problems, NXDN recovery after damaged signals, and behavior during long periods of traffic are still being checked.
 - CTCSS tones may drop while sending DTMF keypad tones.
+- The FM broadcast receiver is not in the Classic profile (`overlay/config/variants/classic.mk` turns it off).
 
 Testing is ongoing. Support for a feature does not guarantee it will work with
 every radio or system.
