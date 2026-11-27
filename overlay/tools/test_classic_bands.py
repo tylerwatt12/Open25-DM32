@@ -36,7 +36,7 @@ def main():
         "\nconst board_t board = {.bands=bands,.band_count=sizeof bands/sizeof bands[0],\n" +
         extension + "\n.power_count=5};\n" + constants + "\n")
     (OUT / "classic_band_functions.inc").write_text("\n\n".join(
-        function(radio, name) for name in ("fm_bw_reg", "rx_tune", "rx", "tx")) + "\n" +
+        function(radio, name) for name in ("fm_bw_reg", "css_words", "rx_tune", "rx", "tx")) + "\n" +
         "\n\n".join(function(menus, name) for name in ("ced_is_p25", "ced_is_nxdn", "ced_rx_band", "ced_problem")))
     features = {key: 0 for key in re.findall(r"^#ifndef (CONFIG_\w+)", (ROOT / "core/config.h").read_text(), re.M)}
     features.update(CONFIG_FM=1, CONFIG_DMR=1, CONFIG_P25=1, CONFIG_NXDN=1, CONFIG_AIR=1,
